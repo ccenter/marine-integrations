@@ -464,30 +464,29 @@ class DriverQualificationTest(InstrumentDriverQualificationTestCase):
 
 #       self.assert_direct_access_stop_telnet()
         
-#    def test_poll(self):
-#        '''
-#        No polling for a single sample
-#        '''
-#       # Poll for a sample and confirm result.
-#        sample1 = self.driver_client.cmd_dvr('execute_resource', Capability.ACQUIRE_SAMPLE)
-#        log.debug("SAMPLE1 = " + str(sample1[1]))
+    def test_poll(self):
+        '''
+        No polling for a single sample
+        '''
 
 
     def test_autosample(self):
         '''
         start and stop autosample and verify data particle
         '''
-        Pass
-        
+
+
     def test_get_set_parameters(self):
         '''
         verify that all parameters can be get set properly, this includes
         ensuring that read only parameters fail on set.
         '''
-        Pass
+        self.assert_enter_command_mode()
+
 
     def test_get_capabilities(self):
         """
         @brief Walk through all driver protocol states and verify capabilities
         returned by get_current_capabilities
         """
+        self.assert_enter_command_mode()

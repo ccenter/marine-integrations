@@ -86,7 +86,6 @@ class InstrumentCmds(BaseEnum):
     DISPLAY_STATUS = 'I'
     QUIT_SESSION = 'Q'
     DISPLAY_CALIBRATION = 'L'
-    TAKE_SAMPLE = 'R'
 
     
 class ProtocolState(BaseEnum):
@@ -641,9 +640,8 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.ENTER, self._handler_command_enter)
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.EXIT, self._handler_command_exit)
-        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.ACQUIRE_SAMPLE, self._handler_command_acquire_sample)
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.START_DIRECT, self._handler_command_start_direct)
-        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.GET, self._handler_command_autosample_test_get)
+        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.GET,                    self._handler_command_autosample_test_get)
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.SET, self._handler_command_set)
 
         self._protocol_fsm.add_handler(ProtocolState.DIRECT_ACCESS, ProtocolEvent.ENTER, self._handler_direct_access_enter)
@@ -657,11 +655,9 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         # Add build handlers for device commands.
         self._add_build_handler(InstrumentCmds.DISPLAY_STATUS,      self._build_simple_command)
-        self._add_build_handler(InstrumentCmds.TAKE_SAMPLE,         self._build_simple_command)
-        
+
         # Add response handlers for device commands.
         self._add_response_handler(InstrumentCmds.DISPLAY_STATUS,   self._parse_ds_response)
-        self._add_response_handler(InstrumentCmds.TAKE_SAMPLE,      self._parse_ts_response)
 
         # Add sample handlers.
         # State state machine in UNKNOWN state.
@@ -809,26 +805,6 @@ class Protocol(CommandResponseInstrumentProtocol):
         # Superclass will query the state.
         self._driver_event(DriverAsyncEvent.STATE_CHANGE)
 
-
-    def _handler_command_acquire_sample(self, *args, **kwargs):
-        """
-        Acquire sample from device.
-        @retval (next_state, result) tuple, (None, sample dict).
-        @throws InstrumentTimeoutException if device cannot be woken for command.
-        @throws InstrumentProtocolException if command could not be built or misunderstood.
-        @throws SampleException if a sample could not be extracted from result.
-        """
-
-        next_state = None
-        next_agent_state = None
-        result = None
-
-        kwargs['timeout'] = 30 # samples can take a long time
-
-        result = self._do_cmd_resp(InstrumentCmds.TAKE_SAMPLE, *args, **kwargs)
-
-        return (next_state, (next_agent_state, result))
-
     def _handler_command_get(self, *args, **kwargs):
         """
         @param args:
@@ -972,12 +948,14 @@ class Protocol(CommandResponseInstrumentProtocol):
     # Private helpers.
     ########################################################################
 
+
     def _build_simple_command(self, cmd):
         """
         Build handler for basic sbe26plus commands.
         @param cmd the simple sbe37 command to format.
         @retval The command to be sent to the device.
         """
+
         return cmd + NEWLINE
 
     def _build_param_dict(self):
@@ -1000,7 +978,6 @@ class Protocol(CommandResponseInstrumentProtocol):
             lambda match : string.upper(match.group(1)),
             self._string_to_string,
             multi_match=True)
-
     def _parse_ds_response(self, response, prompt):
         """
         Response handler for ds command
@@ -1017,24 +994,6 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         return result
 
-    def _parse_ts_response(self, response, prompt):
-        """
-        Response handler for ts command.
-        @param response command response string.
-        @param prompt prompt following command response.
-        @retval sample dictionary containig c, t, d values.
-        @throws InstrumentProtocolException if ts command misunderstood.
-        @throws InstrumentSampleException if response did not contain a sample
-        """
-
-        if prompt != Prompt.COMMAND:
-            raise InstrumentProtocolException('ts command not recognized: %s', response)
-
-        result = response
-
-        log.debug("_parse_ts_response RETURNING RESULT=" + str(result))
-        return result
-    
     ########################################################################
     # Static helpers to format set commands.
     ########################################################################
