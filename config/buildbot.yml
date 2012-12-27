@@ -12,7 +12,7 @@
 # for a list.
 
 
-sbe37test_simulator:
-  make: seabird
-  model: sbe37smb
-  flavor: ooicore
+pco2wtest_simulator:
+  make: sami
+  model: pco2w
+  flavor: cgsn

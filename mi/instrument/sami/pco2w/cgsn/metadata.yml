@@ -1,0 +1,8 @@
+driver_metadata:
+  author: Chris Center
+  driver_make: sami
+  driver_model: pco2w
+  driver_name: cgsn
+  email: ccenter@centurytel.net
+  release_notes: Initial release of the Sami PCO2 driver
+  version: 0.0.1
