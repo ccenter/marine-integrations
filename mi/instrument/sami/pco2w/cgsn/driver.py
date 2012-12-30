@@ -82,11 +82,11 @@ class InstrumentCmds(BaseEnum):
     Represents the commands the driver implements and the string that must be sent to the instrument to
     execute the command.
     """
-    CONFIGURE_INSTRUMENT = 'L'        # sets the user configuration
+    SET_CONFIGURATION = 'L5A'
+    READ_CONFIGURATION = 'L'
     DISPLAY_STATUS = 'I'
     QUIT_SESSION = 'Q'
-    DISPLAY_CALIBRATION = 'L'
-    TAKE_SAMPLE = 'R'
+    READ_SAMPLE = 'R'
 
     
 class ProtocolState(BaseEnum):
@@ -101,6 +101,7 @@ class ProtocolState(BaseEnum):
 #    CALIBRATE = DriverProtocolState.CALIBRATE
 
 class ExportedInstrumentCommand(BaseEnum):
+    READ_CONFIGURATION = "EXPORTED_INSTRUMENT_CMD_READ_CONFIGURATION"
     SET_CONFIGURATION = "EXPORTED_INSTRUMENT_CMD_SET_CONFIGURATION"
 
 class ProtocolEvent(BaseEnum):
@@ -128,6 +129,10 @@ class ProtocolEvent(BaseEnum):
     QUIT_SESSION = 'PROTOCOL_EVENT_QUIT_SESSION'
     INIT_LOGGING = 'PROTOCOL_EVENT_INIT_LOGGING'
 
+    # instrument specific events
+    READ_CONFIGURATION = ExportedInstrumentCommand.READ_CONFIGURATION
+    SET_CONFIGURATION = ExportedInstrumentCommand.SET_CONFIGURATION
+    
     CLOCK_SYNC = DriverEvent.CLOCK_SYNC
 
 class Capability(BaseEnum):
@@ -139,13 +144,16 @@ class Capability(BaseEnum):
     STOP_AUTOSAMPLE = ProtocolEvent.STOP_AUTOSAMPLE
     CLOCK_SYNC = ProtocolEvent.CLOCK_SYNC
     ACQUIRE_STATUS  = ProtocolEvent.ACQUIRE_STATUS
+    
+    READ_CONFIGURATION = ProtocolEvent.READ_CONFIGURATION
+    SET_CONFIGURATION = ProtocolEvent.SET_CONFIGURATION
 
 class Parameter(DriverParameter):
     """
     Device specific parameters.
     """
     # DS
-    DEVICE_VERSION = 'DEVICE_VERSION'
+    TIMESTAMP = 'TIMESTAMP'
     
 # Device prompts.
 class Prompt(BaseEnum):
@@ -157,13 +165,6 @@ class Prompt(BaseEnum):
     CONFIG_COMMAND = 'L'
     CONFIRMATION_PROMPT = 'proceed Y/N ?'
     
-########################################################################
-# Static helpers to format set commands.
-########################################################################
-@staticmethod
-def _string_to_string(v):
-    return v
-
 ###############################################################################
 # Data Particles
 ################################################################################
@@ -637,7 +638,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.ENTER, self._handler_unknown_enter)
         self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.EXIT, self._handler_unknown_exit)
         self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.DISCOVER, self._handler_unknown_discover)
-        self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.START_DIRECT, self._handler_command_start_direct)
+#        self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.START_DIRECT, self._handler_command_start_direct)
 
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.ENTER, self._handler_command_enter)
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.EXIT, self._handler_command_exit)
@@ -645,6 +646,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.START_DIRECT, self._handler_command_start_direct)
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.GET, self._handler_command_autosample_test_get)
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.SET, self._handler_command_set)
+        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.SET_CONFIGURATION, self._handler_command_set_configuration)
 
         self._protocol_fsm.add_handler(ProtocolState.DIRECT_ACCESS, ProtocolEvent.ENTER, self._handler_direct_access_enter)
         self._protocol_fsm.add_handler(ProtocolState.DIRECT_ACCESS, ProtocolEvent.EXIT, self._handler_direct_access_exit)
@@ -657,11 +659,14 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         # Add build handlers for device commands.
         self._add_build_handler(InstrumentCmds.DISPLAY_STATUS,      self._build_simple_command)
-        self._add_build_handler(InstrumentCmds.TAKE_SAMPLE,         self._build_simple_command)
+        self._add_build_handler(InstrumentCmds.READ_CONFIGURATION,  self._build_simple_command)
+        self._add_build_handler(InstrumentCmds.READ_SAMPLE,         self._build_simple_command)
+        self._add_build_handler(InstrumentCmds.SET_CONFIGURATION,   self._build_set_configuration_command)
         
         # Add response handlers for device commands.
-        self._add_response_handler(InstrumentCmds.DISPLAY_STATUS,   self._parse_ds_response)
-        self._add_response_handler(InstrumentCmds.TAKE_SAMPLE,      self._parse_ts_response)
+        self._add_response_handler(InstrumentCmds.DISPLAY_STATUS,    self._parse_ds_response)
+        self._add_response_handler(InstrumentCmds.READ_CONFIGURATION,self._parse_cfg_response)
+        self._add_response_handler(InstrumentCmds.READ_SAMPLE,       self._parse_rs_response)
 
         # Add sample handlers.
         # State state machine in UNKNOWN state.
@@ -725,6 +730,49 @@ class Protocol(CommandResponseInstrumentProtocol):
             log.debug("_got_chunk of Config = Passed good")
         else:
             log.debug("_got_chunk = Failed")
+
+    def _do_cmd_resp(self, cmd, *args, **kwargs):
+        """
+        Perform a command-response on the device.
+        @param cmd The command to execute.
+        @param args positional arguments to pass to the build handler.
+        @param timeout=timeout optional command timeout.
+        @retval resp_result The (possibly parsed) response result.
+        @raises InstrumentTimeoutException if the response did not occur in time.
+        @raises InstrumentProtocolException if command could not be built or if response
+        was not recognized.
+        """
+        
+        # Get timeout and initialize response.
+        timeout = kwargs.get('timeout', 30)
+        expected_prompt = kwargs.get('expected_prompt', InstrumentPrompts.Z_ACK)
+                            
+        # Clear line and prompt buffers for result.
+        self._linebuf = ''
+        self._promptbuf = ''
+
+        # Get the build handler.
+        build_handler = self._build_handlers.get(cmd, None)
+        if build_handler:
+            cmd_line = build_handler(cmd, *args, **kwargs)
+        else:
+            cmd_line = cmd
+
+        # Send command.
+        log.debug('_do_cmd_resp: %s(%s), timeout=%s, expected_prompt=%s (%s),' 
+                  % (repr(cmd_line), repr(cmd_line.encode("hex")), timeout, expected_prompt, expected_prompt.encode("hex")))
+        self._connection.send(cmd_line)
+
+        # Wait for the prompt, prepare result and return, timeout exception
+        (prompt, result) = self._get_response(timeout,
+                                              expected_prompt=expected_prompt)
+        resp_handler = self._response_handlers.get((self.get_current_state(), cmd), None) or \
+            self._response_handlers.get(cmd, None)
+        resp_result = None
+        if resp_handler:
+            resp_result = resp_handler(result, prompt)
+        
+        return resp_result
 
     def _filter_capabilities(self, events):
         """
@@ -816,6 +864,13 @@ class Protocol(CommandResponseInstrumentProtocol):
         @retval (next_state, result) tuple, (None, sample dict).
         @throws InstrumentTimeoutException if device cannot be woken for command.
         @throws InstrumentProtocolException if command could not be built or misunderstood.
+        next_state = None
+        next_agent_state = None
+        result = None
+
+        result = self._do_cmd_resp(InstrumentCmds.ACQUIRE_DATA, *args, **kwargs)
+        
+        return (next_state, (next_agent_state, result))
         @throws SampleException if a sample could not be extracted from result.
         """
 
@@ -825,21 +880,38 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         kwargs['timeout'] = 30 # samples can take a long time
 
+        log.debug("Testing _handler_command_acquire_sample")
+
         result = self._do_cmd_resp(InstrumentCmds.TAKE_SAMPLE, *args, **kwargs)
 
         return (next_state, (next_agent_state, result))
 
-    def _handler_command_get(self, *args, **kwargs):
+    def _handler_command_set_configuration(self, *args, **kwargs):
         """
-        @param args:
-        @param kwargs:
-        @return:
         """
         next_state = None
+        next_agent_state = None
         result = None
 
-        log.debug("Testing _handler_command_get")
-        return (next_state, result)
+        log.debug("Testing _handler_command_set_configuration")
+        
+        kwargs['timeout'] = 30 # samples can take a long time
+
+        result = self._do_cmd_resp(InstrumentCmds.SET_CONFIGURATION, *args, **kwargs)
+
+        return (next_state, (next_agent_state, result))
+
+    def _build_set_configuration_command(self, cmd, *args, **kwargs):
+        user_configuration = kwargs.get('user_configuration', None)
+        log.debug("Testing _build_set_configuration_command")
+        if not user_configuration:
+            raise InstrumentParameterException('set_configuration command missing user_configuration parameter.')
+        if not isinstance(user_configuration, str):
+            raise InstrumentParameterException('set_configuration command requires a string user_configuration parameter.')
+        self._dump_config(user_configuration)        
+            
+        cmd_line = cmd + user_configuration
+        return cmd_line
 
     ################################
     # SET / SETSAMPLING
@@ -871,10 +943,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         result = None
         log.debug("_handler_command_start_direct: entering DA mode")
         return (next_state, (next_agent_state, result))
-		
-    ########################################################################
-    # Autosample handlers.
-    ########################################################################
+
     def _handler_command_autosample_test_get(self, *args, **kwargs):
         """
         Get device parameters from the parameter dict.
@@ -982,31 +1051,31 @@ class Protocol(CommandResponseInstrumentProtocol):
 
     def _build_param_dict(self):
         """
-        Populate the parameter dictionary with sbe26plus parameters.
-        For each parameter key, add match stirng, match lambda function,
+        Populate the parameter dictionary with our device parameters.
+        For each parameter key, add match string, match lambda function,
         and value formatting function for set commands.
 
         """
         # Add parameter handlers to parameter dict.
 
-        # DS
-
-        ds_line_01 = r'SBE 26plus V ([\w.]+) +SN (\d+) +(\d{2} [a-zA-Z]{3,4} \d{4} +[\d:]+)' # NOT DONE #
+        # DS (Device Status)
+        cfg_line_01 = CONFIG_REGEX
+        
         #
         # Next 2 work together to pull 2 values out of a single line.
-        #
-        self._param_dict.add(Parameter.DEVICE_VERSION,
-            ds_line_01,
+        #      
+        self._param_dict.add(Parameter.TIMESTAMP,
+            cfg_line_01,
             lambda match : string.upper(match.group(1)),
-            self._string_to_string,
+            self._string_to_int,
             multi_match=True)
 
-    def _parse_ds_response(self, response, prompt):
+    def _parse_cfg_response(self, response, prompt):
         """
-        Response handler for ds command
+        Response handler for configuration "L" command
         """
         if prompt != Prompt.COMMAND:
-            raise InstrumentProtocolException('ds command not recognized: %s.' % response)
+            raise InstrumentProtocolException('cfg command not recognized: %s.' % response)
 
         # return the Ds as text
         match = CONFIG_REGEX_MATCHER.search(response)
@@ -1016,10 +1085,26 @@ class Protocol(CommandResponseInstrumentProtocol):
             result = match.group(1)
 
         return result
-
-    def _parse_ts_response(self, response, prompt):
+    
+    def _parse_ds_response(self, response, prompt):
         """
-        Response handler for ts command.
+        Response handler for ds command
+        """
+        if prompt != Prompt.COMMAND:
+            raise InstrumentProtocolException('ds command not recognized: %s.' % response)
+
+        # return the Ds as text
+        match = STATUS_REGEX_MATCHER.search(response)
+        result = None
+
+        if match:
+            result = match.group(1)
+
+        return result
+
+    def _parse_rs_response(self, response, prompt):
+        """
+        Response handler for rs (Read Sample) command.
         @param response command response string.
         @param prompt prompt following command response.
         @retval sample dictionary containig c, t, d values.
@@ -1028,7 +1113,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
 
         if prompt != Prompt.COMMAND:
-            raise InstrumentProtocolException('ts command not recognized: %s', response)
+            raise InstrumentProtocolException('Command R not recognized: %s', response)
 
         result = response
 
@@ -1038,8 +1123,13 @@ class Protocol(CommandResponseInstrumentProtocol):
     ########################################################################
     # Static helpers to format set commands.
     ########################################################################
-
     @staticmethod
     def _string_to_string(v):
         return v
+    
+    @staticmethod
+    def _string_to_int(v):
+        r = int(v,16)
+        return r
+    
 

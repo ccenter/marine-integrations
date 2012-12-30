@@ -138,7 +138,7 @@ class DataParticleMixin(DriverTestMixin):
     ##
     _driver_parameters = {
         # DS # parameters - contains all setsampling parameters
-        Parameter.DEVICE_VERSION : str
+        Parameter.TIMESTAMP : int
     }
 
     # Test results that get decoded from the string sent to the chunker.   
