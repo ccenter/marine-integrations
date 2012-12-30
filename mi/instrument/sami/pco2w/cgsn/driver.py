@@ -309,9 +309,6 @@ class SamiConfigDataParticle(DataParticle):
         # Restore the first character we removed for recognition.
         # TODO: Improve logic to not rely on 1st character of "C"
         raw_data = "C" + self.raw_data
-		return _sami_parse_config( raw_data )
-		
-	def _sami_parse_config(self, raw_data)
         regex1 = CONFIG_REGEX_MATCHER
         match = regex1.match(raw_data)
         if not match:
@@ -667,7 +664,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         
         # Add response handlers for device commands.
         self._add_response_handler(InstrumentCmds.DISPLAY_STATUS,    self._parse_ds_response)
-        self._add_response_handler(InstrumentCmds.READ_CONFIGURATION,self._parse_cfg_response)
+        self._add_response_handler(InstrumentCmds.READ_CONFIGURATION,self._parse_config_response)
         self._add_response_handler(InstrumentCmds.READ_SAMPLE,       self._parse_rs_response)
 
         # Add sample handlers.
@@ -806,10 +803,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         an expected state.
         """
         log.debug("Testing _handler_unknown_discover")
-		timeout = kwargs.get('timeout', TIMEOUT)
         return (ProtocolState.COMMAND, ResourceAgentState.IDLE)
-
-        return (next_state, result)
 
     def _handler_unknown_exit(self, *args, **kwargs):
         """
