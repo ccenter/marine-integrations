@@ -309,8 +309,10 @@ class SamiConfigDataParticle(DataParticle):
         # Restore the first character we removed for recognition.
         # TODO: Improve logic to not rely on 1st character of "C"
         raw_data = "C" + self.raw_data
+		return _sami_parse_config( raw_data )
+		
+	def _sami_parse_config(self, raw_data)
         regex1 = CONFIG_REGEX_MATCHER
-
         match = regex1.match(raw_data)
         if not match:
             raise SampleException("No regex match of parsed config data: [%s]" % raw_data)
@@ -804,23 +806,8 @@ class Protocol(CommandResponseInstrumentProtocol):
         an expected state.
         """
         log.debug("Testing _handler_unknown_discover")
+		timeout = kwargs.get('timeout', TIMEOUT)
         return (ProtocolState.COMMAND, ResourceAgentState.IDLE)
-
-    def _handler_unknown_force_state(self, *args, **kwargs):
-        """
-        Force driver into a given state for the purposes of unit testing
-        @param state=desired_state Required desired state to transition to.
-        @raises InstrumentParameterException if no st'ate parameter.
-        """
-        log.debug("************* " + repr(kwargs))
-        log.debug("************* in _handler_unknown_force_state()" + str(kwargs.get('state', None)))
-
-        state = kwargs.get('state', None)  # via kwargs
-        if state is None:
-            raise InstrumentParameterException('Missing state parameter.')
-
-        next_state = state
-        result = state
 
         return (next_state, result)
 
@@ -1070,7 +1057,7 @@ class Protocol(CommandResponseInstrumentProtocol):
             self._string_to_int,
             multi_match=True)
 
-    def _parse_cfg_response(self, response, prompt):
+    def _parse_config_response(self, response, prompt):
         """
         Response handler for configuration "L" command
         """
@@ -1079,7 +1066,7 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         # return the Ds as text
         match = CONFIG_REGEX_MATCHER.search(response)
-        result = None
+        result = {} # None
 
         if match:
             result = match.group(1)
