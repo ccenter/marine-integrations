@@ -76,8 +76,10 @@ SAMPLE_ERR_DATA = "?03" + NEWLINE
 SAMPLE_RECORD_DATA = "*5B2704C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B" + NEWLINE
 SAMPLE_STATUS_DATA = ":000029ED40" + NEWLINE
 SAMPLE_STATUS_DATA_BAD = "000029ED40" + NEWLINE
-SAMPLE_CONFIG_DATA = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C1020FFA8181C010038100101202564000433383335000200010200020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" + NEWLINE
-#                     :000029ED4000000000000000000000F7" + NEWLINE
+# SAMPLE_CONFIG_DATA = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C
+SAMPLE_CONFIG_DATA = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C071020FFA8181C010038100101202564000433383335000200010200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" + NEWLINE
+#
+# :000029ED4000000000000000000000F7" + NEWLINE
 
 # Other actual data captures of Sami Status Data.
 # :000EDCAE0000000000000000000000F70000F7
@@ -178,6 +180,7 @@ class DataParticleMixin(DriverTestMixin):
         SamiConfigDataParticleKey.CFG_START_TIME_OFFSET:{ 'type': int, 'value': 244},
         SamiConfigDataParticleKey.CFG_RECORDING_TIME:   { 'type': int, 'value': 31536000},
         SamiConfigDataParticleKey.CFG_MODE:             { 'type': int, 'value': 87 },        
+
         SamiConfigDataParticleKey.CFG_TIMER_INTERVAL_0: { 'type': int, 'value': 1800 },
         SamiConfigDataParticleKey.CFG_DRIVER_ID_0:      { 'type': int, 'value': 4 },
         SamiConfigDataParticleKey.CFG_PARAM_PTR_0:      { 'type': int, 'value': 1 },
@@ -193,7 +196,20 @@ class DataParticleMixin(DriverTestMixin):
         SamiConfigDataParticleKey.CFG_TIMER_INTERVAL_4: { 'type': int, 'value': 14400 },
         SamiConfigDataParticleKey.CFG_DRIVER_ID_4:      { 'type': int, 'value': 0 },
         SamiConfigDataParticleKey.CFG_PARAM_PTR_4:      { 'type': int, 'value': 28 },
-        SamiConfigDataParticleKey.CFG_CO2_SETTINGS:     { 'type': unicode, 'value': u'1020FFA8181C010038' },
+        
+        SamiConfigDataParticleKey.USE_BAUD_RATE_9600:   { 'type': bool,'value': False },
+        SamiConfigDataParticleKey.SEND_RECORD_TYPE_EARLY:{'type': bool,'value': True },
+        SamiConfigDataParticleKey.SEND_LIVE_RECORDS:    { 'type': bool,'value': True },
+        SamiConfigDataParticleKey.PUMP_PULSE:           { 'type': int, 'value': 0x10 },
+        SamiConfigDataParticleKey.PUMP_ON_TO_MEAURSURE: { 'type': int, 'value': 0x20 },
+        SamiConfigDataParticleKey.SAMPLES_PER_MEASURE:  { 'type': int, 'value': 0xFF },
+        SamiConfigDataParticleKey.CYCLES_BETWEEN_BLANKS:{ 'type': int, 'value': 0xA8 },
+        SamiConfigDataParticleKey.NUM_REAGENT_CYCLES:   { 'type': int, 'value': 0x18 },
+        SamiConfigDataParticleKey.NUM_BLANK_CYCLES:     { 'type': int, 'value': 0x1C },
+        SamiConfigDataParticleKey.FLUSH_PUMP_INTERVAL:  { 'type': int, 'value': 0x1 },
+        SamiConfigDataParticleKey.BLANK_FLUSH_ON_START: { 'type': bool,'value': True },
+        SamiConfigDataParticleKey.PUMP_PULSE_POST_MEASURE: { 'type': bool,'value': False },
+        SamiConfigDataParticleKey.NUM_EXTRA_PUMP_CYCLES:{ 'type': int, 'value': 0x38 },                         
         SamiConfigDataParticleKey.CFG_SERIAL_SETTINGS:  { 'type': unicode, 'value': u'10010120256400043338333500' }
     }
     
@@ -294,7 +310,6 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         # Test capabilites for duplicates, them verify that capabilities is a subset of proto events
         self.assert_enum_has_no_duplicates(Capability())
         self.assert_enum_complete(Capability(), ProtocolEvent())
-
 
     def test_chunker(self):
         """

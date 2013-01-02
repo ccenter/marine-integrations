@@ -47,7 +47,7 @@ STATUS_REGEX_MATCHER = re.compile(STATUS_REGEX)
 RECORD_TYPE4_REGEX = r'[*](\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f]{7})+.*?\r\n'
 RECORD_TYPE4_REGEX_MATCHER = re.compile(RECORD_TYPE4_REGEX)
 
-CONFIG_REGEX = r'[C](\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{17})(\w[0-9A-Fa-f]{25})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f]{1}).*?\r\n'
+CONFIG_REGEX = r'[C](\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{17})(\w[0-9A-Fa-f]{25})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f]{1}).*?\r\n'
 CONFIG_REGEX_MATCHER = re.compile(CONFIG_REGEX)
 
 ERROR_REGEX = r'\?\w[0-9A-Fa-f]{1}.*?\r\n'
@@ -164,7 +164,19 @@ class Prompt(BaseEnum):
     BAD_COMMAND = '?'
     CONFIG_COMMAND = 'L'
     CONFIRMATION_PROMPT = 'proceed Y/N ?'
-    
+
+# Common utilities.    
+def calc_crc(s, num_points):
+    cs = 0
+    k = 0
+    for i in range(num_points):
+#        print("I= " + str(i) + " " + s[k:k+2] )
+        value = int(s[k:k+2],16)  # 2-chars per data point
+        cs = cs + value
+        k = k + 2
+    cs = cs & 0xFF        
+    return(cs)
+
 ###############################################################################
 # Data Particles
 ################################################################################
@@ -295,7 +307,25 @@ class SamiConfigDataParticleKey(BaseEnum):
     CFG_TIMER_INTERVAL_4 = 'timer_interval_4'
     CFG_DRIVER_ID_4 = 'driver_id_4'
     CFG_PARAM_PTR_4 = 'param_ptr_4'
-    CFG_CO2_SETTINGS = 'co2_settings'
+    
+    # Global Configuration Settings Register for PCO2    
+    USE_BAUD_RATE_9600 = "use_baud_rate_9600"
+    SEND_RECORD_TYPE_EARLY = "send_record_type_early"
+    SEND_LIVE_RECORDS = "send_live_records"
+    
+    # PCO2 Pump Driver
+    PUMP_PULSE = "pump_pulse"
+    PUMP_ON_TO_MEAURSURE = "pump_on_to_measure"
+    SAMPLES_PER_MEASURE = "samples_per_measure"
+    CYCLES_BETWEEN_BLANKS = "cycles_between_blanks"
+    NUM_REAGENT_CYCLES = "num_reagent_cycles"
+    NUM_BLANK_CYCLES = "num_blank_cycles"
+    FLUSH_PUMP_INTERVAL = "flush_pump_interval"
+    BLANK_FLUSH_ON_START = "blank_flush_on_start"
+    PUMP_PULSE_POST_MEASURE = "pump_pulse_post_measure"
+    NUM_EXTRA_PUMP_CYCLES = "num_extra_pump_cycles"
+    
+    # Not currently decoded
     CFG_SERIAL_SETTINGS = 'serial_settings'
         
 class SamiConfigDataParticle(DataParticle):
@@ -304,6 +334,7 @@ class SamiConfigDataParticle(DataParticle):
     the building of values, and the rest should come along for free.
     """
     _data_particle_type = DataParticleType.CONFIG_PARSED
+    config_crc = None  # Last downloaded configuration CRC value.
 
     def _build_parsed_values(self):
         # Restore the first character we removed for recognition.
@@ -321,7 +352,20 @@ class SamiConfigDataParticle(DataParticle):
         timer_interval = []
         driver_id = []
         param_ptr = []
+        
         co2_settings = None
+        pump_pulse = 0x10
+        pump_on_to_measure = 0x20
+        samples_per_measure = 0xFF
+        cycles_between_blanks = 0xA8
+        num_reagent_cycles = 0x18    
+        num_blank_cycles = 0x1C
+        flush_pump_interval = 0x1
+        bit_switch = None
+        blank_flush_on_start = False
+        pump_pulse_post_measure = False
+        num_extra_pump_cycles = 0x38
+        
         serial_settings = None
 
         # Decode Time Stamp since Launch       
@@ -334,26 +378,66 @@ class SamiConfigDataParticle(DataParticle):
         txt = match.group(3)
         recording_time = int(txt,16)
 
+        # Decode the Mode Bits.
         txt = match.group(4)
-        mode = int(txt,16);
-          
+        mode = int(txt,16);        
         idx = 5
+        
+        # Decode data.
         device_group = []
         for i in range(5):
             txt = match.group(idx)
             timer_interval.append( int(txt,16) )
+            log.debug(" timer_interval = " + txt)
 
             txt = match.group(idx+1)
             driver_id.append( int(txt,16) )
+            log.debug(" driver_id = " + txt)
             
             txt = match.group(idx+2)
             param_ptr.append( int(txt,16) )
+            log.debug(" param_ptr = " + txt)
             idx = idx + 3
 
+        # The next byte is the Global Configuration Switches.
+        txt = match.group(idx)
+        idx = idx + 1
+        global_parameter_switch = int(txt,16)
+        use_baud_rate_9600     = ((global_parameter_switch & 0x1) != 0x1);
+        send_record_type_early = ((global_parameter_switch & 0x2) == 0x2);
+        send_live_records      = ((global_parameter_switch & 0x4) == 0x4);
+        log.debug("Config Bits: " + str(global_parameter_switch))
+                
+        # Decode the PCO2 Configruation Parameters
         txt = match.group(idx)
         idx = idx + 1
         co2_settings = txt
+        
+        pump_pulse            = int(co2_settings[0:2],16)
+        pump_on_to_measure    = int(co2_settings[2:4],16)
+        samples_per_measure   = int(co2_settings[4:6],16)
+        cycles_between_blanks = int(co2_settings[6:8],16)
+        num_reagent_cycles    = int(co2_settings[8:10],16)
+        num_blank_cycles      = int(co2_settings[10:12],16)
+        flush_pump_interval   = int(co2_settings[12:14],16)
+        bit_switch            = int(co2_settings[14:16],16)
+        num_extra_pump_cycles = int(co2_settings[16:18],16)
+        
+        # Decode the Bit Switches for driver 4.
+        blank_flush_on_start    = ((bit_switch & 0x1) != 0x1)  # 1=Don't start with Blank Flush
+        pump_pulse_post_measure = ((bit_switch & 0x2) == 0x2)  # Measure after each Pump Pulse.
     
+#        log.debug("pump_pulse = " + str(hex(pump_pulse)))
+#        log.debug("pump_on_to_measure = " + str(hex(pump_on_to_measure)))
+#        log.debug("samples_per_measure = " + str(hex(samples_per_measure)))
+#        log.debug("cycles_between_blanks = " + str(hex(cycles_between_blanks)))
+#        log.debug("num_reagent_cycles = " + str(hex(num_reagent_cycles)))
+#        log.debug("num_blank_cycles = " + str(hex(num_blank_cycles)))
+#        log.debug("flush_pump_interval = " + str(hex(flush_pump_interval)))
+#        log.debug("bit_switch = " + str(hex(bit_switch)))                   
+#       log.debug("num_extra_pump_cycles = " + str(hex(num_extra_pump_cycles)))
+        
+        # Serial settings for alternate devices.
         txt = match.group(idx)
         idx = idx + 1
         serial_settings = txt
@@ -402,12 +486,197 @@ class SamiConfigDataParticle(DataParticle):
                   {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_DRIVER_ID_4,
                    DataParticleKey.VALUE: driver_id[4]},
                   {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_PARAM_PTR_4,
-                   DataParticleKey.VALUE: param_ptr[4]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_CO2_SETTINGS,
-                   DataParticleKey.VALUE: co2_settings},
+                   DataParticleKey.VALUE: param_ptr[4]},                     
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.USE_BAUD_RATE_9600,
+                   DataParticleKey.VALUE: use_baud_rate_9600},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SEND_RECORD_TYPE_EARLY,
+                   DataParticleKey.VALUE: send_record_type_early},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SEND_LIVE_RECORDS,
+                   DataParticleKey.VALUE: send_live_records},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PUMP_PULSE,
+                   DataParticleKey.VALUE: pump_pulse},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PUMP_ON_TO_MEAURSURE,
+                   DataParticleKey.VALUE: pump_on_to_measure},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SAMPLES_PER_MEASURE,
+                   DataParticleKey.VALUE: samples_per_measure},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CYCLES_BETWEEN_BLANKS,
+                  DataParticleKey.VALUE: cycles_between_blanks},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.NUM_REAGENT_CYCLES,
+                  DataParticleKey.VALUE: num_reagent_cycles},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.NUM_BLANK_CYCLES,
+                   DataParticleKey.VALUE: num_blank_cycles},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.FLUSH_PUMP_INTERVAL,
+                  DataParticleKey.VALUE: flush_pump_interval},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.BLANK_FLUSH_ON_START,
+                   DataParticleKey.VALUE: blank_flush_on_start},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PUMP_PULSE_POST_MEASURE,
+                   DataParticleKey.VALUE: pump_pulse_post_measure},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.NUM_EXTRA_PUMP_CYCLES,
+                   DataParticleKey.VALUE: num_extra_pump_cycles},
                   {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_SERIAL_SETTINGS,
-                   DataParticleKey.VALUE: serial_settings}]
+                   DataParticleKey.VALUE: serial_settings} ]
+                  
         return result
+    
+    # Routines for building a configuration data line.
+    def _make_config_global_switch_settings(self):
+        cfg_reg = None;
+        
+        baud_rate_57600 = False  # 57600 / 9600
+        send_record_type_early = True
+        send_live_records = True  # Send Live Records over serial Port.
+    
+        # Global configuration switches are bit-fields in this parameter
+        cfg_reg = 0x0
+    
+        if( baud_rate_57600 == True ):
+            cfg_reg = config_reg | 0x01   # Bit-0            
+        if( send_record_type_early == True ):
+            cfg_reg = config_reg | 0x02   # Bit-1            
+        if( send_live_records == True ):
+            cfg_reg = config_reg | 0x04   # Bit-2            
+        return( cfg_reg )
+    
+    def _make_config_driver_params(self):
+        """
+        Sami CO2 Driver 4/5 Parameter Settings
+        """
+        cfg = None
+        
+        pump_pulse = 0x10
+        pump_on_to_measure = 0x20
+        num_samples_per_measure = 0xFF
+        cycles_between_blanks = 0xA8
+        num_reagent_cycles = 0x18    
+        num_blank_cycles = 0x1C
+        flush_pump_interval = 0x1
+        num_extra_pump_cycles = 0x38
+
+        # 2-bits are set for special configuration parameters.
+        bits = 0x0
+        blank_flush_on_start = True
+        pump_pulse_post_measure = False
+        if( blank_flush_on_start == False ):
+            bits |= 0x1
+        if( pump_pulse_post_measure == True ):
+            bits |= 0x2            
+        
+        # Convert settings into hex string for Sami interface.
+        cfg_driver_info = int8_to_string( pump_pulse )
+        cfg = cfg + int8_to_string( pump_on_to_measure )
+        cfg = cfg + int8_to_string( num_samples_per_measure )
+        cfg = cfg + int8_to_string( cycles_between_blanks )
+        cfg = cfg + int8_to_string( num_reagent_cycles )
+        cfg = cfg + int8_to_string( num_blank_cycles )
+        cfg = cfg + int8_to_string( flush_pump_interval )
+        cfg = cfg + int8_to_string( bits )
+        cfg = cfg + int8_to_string( num_extra_pump_cycles )
+        return(cfg)
+        
+    def _make_config_string(self):
+        config_str = None
+        
+        timestamp = time.gmtime()  # This should come from the outside world.
+        start_time = 244       # Offset from current date.
+        stop_time = 31536000   # Length of operation.
+        sample_inteval = 1800  # Seconds
+        mode = 87
+
+        secF = time.mktime(timestamp)
+        sec = int( secF ) + NSECONDS_1904_to_1970
+        timestamp_str = int32_to_string( sec )
+
+        config_str = timestamp_str        
+        config_str = config_str + int32_to_string( start_time )
+        config_str = config_str + int32_to_string( stop_time )
+        config_str = config_str + int8_to_string( mode )
+    
+        # PCO2 Measurements on on Device-4.
+        SAMI_DRIVER_ID_PCO2W = 4
+        config_str = config_str + int_to_string6( sample_inteval )
+        config_str = config_str + int8_to_string( SAMI_DRIVER_ID_PCO2W )
+        config_str = config_str + int8_to_string( 1 )  # Always 1 for SAMI
+
+        # These parameters are for the individual devices connected.
+        config_str = config_str + int_to_string6( 600 )
+        config_str = config_str + int8_to_string( 3 )
+        config_str = config_str + int8_to_string( 0xA )
+
+        config_str = config_str + int_to_string6( 600 )
+        config_str = config_str + int8_to_string( 0 )
+        config_str = config_str + int8_to_string( 0x17 )
+
+        config_str = config_str + int_to_string6( 600 )
+        config_str = config_str + int8_to_string( 01)
+        config_str = config_str + int8_to_string( 0x1A )
+
+        # Prestart Interval.
+        config_str = config_str + int_to_string6( 14400 )
+        config_str = config_str + int8_to_string( 0 )
+        config_str = config_str + int8_to_string( 0x1C )
+    
+        # Set global parameter switch.
+        global_config_reg = make_config_global_switch_settings()    
+        config_str = config_str + int8_to_string( global_config_reg )
+        log.debug(" config-string len = %" % str(len(config_str)))
+    
+        # Set driver parameters for how PCO2 data will be acquired.
+        config_str = config_str + make_config_driver_params()
+        
+        # Driver parameters for other devices.
+        config_str = config_str + "10010120256400043338333500"  # From Testing.
+        config_str = config_str + "020001"
+        config_str = config_str + "0200"
+        n = len( config_str )
+        
+        # Pad string out to 256-characters (this completes a full flash write size)
+        for i in range(n,256):
+            config_str = config_str + "0"
+        n = len( config_str )
+        config_crc = ComputeCrc( config_str, n )
+        log.debug("Configuration completed " + str(n) + " crc = " + str(config_crc) )
+        
+        # Compute the CRC. This is returned on the download.
+        return( config_str )
+        
+    # Tools for configuration.
+    def _digit_to_ascii(self, digit):
+        c = ord('0')
+        if( digit <= 9 ):
+            c = c + digit
+        else:
+            c = digit - 10 + ord('A')
+        return(chr(c))
+    
+    def int8_to_string(value):
+        msg = digit_to_ascii( (value & 0x000000F0) >> 4 )
+        msg = msg + digit_to_ascii( (value & 0x0000000F) )
+        return(msg)
+    
+    def int8_to_string(value):
+        msg = digit_to_ascii( (value & 0x000000F0) >> 4 )
+        msg = msg + digit_to_ascii( (value & 0x0000000F) )
+        return(msg)
+    
+    def int_to_string6(value):
+        msg = digit_to_ascii( (value & 0x00F00000) >> 20 )
+        msg = msg + digit_to_ascii( (value & 0x000F0000) >> 16 )
+        msg = msg + digit_to_ascii( (value & 0x0000F000) >> 12 )
+        msg = msg + digit_to_ascii( (value & 0x00000F00) >> 8 )
+        msg = msg + digit_to_ascii( (value & 0x000000F0) >> 4 )
+        msg = msg + digit_to_ascii( (value & 0x0000000F) )
+        return(msg)
+
+    def int32_to_string(value):
+        msg = digit_to_ascii( (value & 0xF0000000) >> 28 )
+        msg = msg + digit_to_ascii( (value & 0x0F000000) >> 24 )
+        msg = msg + digit_to_ascii( (value & 0x00F00000) >> 20 )
+        msg = msg + digit_to_ascii( (value & 0x000F0000) >> 16 )
+        msg = msg + digit_to_ascii( (value & 0x0000F000) >> 12 )
+        msg = msg + digit_to_ascii( (value & 0x00000F00) >> 8 )
+        msg = msg + digit_to_ascii( (value & 0x000000F0) >> 4 )
+        msg = msg + digit_to_ascii( (value & 0x0000000F) )
+        return(msg)
 
 class SamiStatusSwBusDataParticleKey(BaseEnum):
     PUMP_ON = "pump_on"
@@ -458,7 +727,7 @@ class SamiStatusDataParticleKey(BaseEnum):
     EXTERNAL_DEVICE_FAULT = "external_device_fault"
     FLASH_ERASED = "flash_erased"
     POWER_ON_INVALID = "power_on_invalid"
-
+    
 class SamiStatusDataParticle(DataParticle):
     """
     Routines for parsing raw data into a data particle structure. Override
