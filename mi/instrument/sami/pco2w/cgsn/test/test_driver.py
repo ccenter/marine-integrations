@@ -76,8 +76,10 @@ SAMPLE_ERR_DATA = "?03" + NEWLINE
 SAMPLE_RECORD_DATA = "*5B2704C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B" + NEWLINE
 SAMPLE_STATUS_DATA = ":000029ED40" + NEWLINE
 SAMPLE_STATUS_DATA_BAD = "000029ED40" + NEWLINE
-SAMPLE_CONFIG_DATA = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C1020FFA8181C010038100101202564000433383335000200010200020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" + NEWLINE
-#                     :000029ED4000000000000000000000F7" + NEWLINE
+# SAMPLE_CONFIG_DATA = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C
+SAMPLE_CONFIG_DATA = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C071020FFA8181C010038100101202564000433383335000200010200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" + NEWLINE
+#
+# :000029ED4000000000000000000000F7" + NEWLINE
 
 # Other actual data captures of Sami Status Data.
 # :000EDCAE0000000000000000000000F70000F7
@@ -138,7 +140,7 @@ class DataParticleMixin(DriverTestMixin):
     ##
     _driver_parameters = {
         # DS # parameters - contains all setsampling parameters
-        Parameter.DEVICE_VERSION : str
+        Parameter.TIMESTAMP : int
     }
 
     # Test results that get decoded from the string sent to the chunker.   
@@ -178,6 +180,7 @@ class DataParticleMixin(DriverTestMixin):
         SamiConfigDataParticleKey.CFG_START_TIME_OFFSET:{ 'type': int, 'value': 244},
         SamiConfigDataParticleKey.CFG_RECORDING_TIME:   { 'type': int, 'value': 31536000},
         SamiConfigDataParticleKey.CFG_MODE:             { 'type': int, 'value': 87 },        
+
         SamiConfigDataParticleKey.CFG_TIMER_INTERVAL_0: { 'type': int, 'value': 1800 },
         SamiConfigDataParticleKey.CFG_DRIVER_ID_0:      { 'type': int, 'value': 4 },
         SamiConfigDataParticleKey.CFG_PARAM_PTR_0:      { 'type': int, 'value': 1 },
@@ -193,7 +196,20 @@ class DataParticleMixin(DriverTestMixin):
         SamiConfigDataParticleKey.CFG_TIMER_INTERVAL_4: { 'type': int, 'value': 14400 },
         SamiConfigDataParticleKey.CFG_DRIVER_ID_4:      { 'type': int, 'value': 0 },
         SamiConfigDataParticleKey.CFG_PARAM_PTR_4:      { 'type': int, 'value': 28 },
-        SamiConfigDataParticleKey.CFG_CO2_SETTINGS:     { 'type': unicode, 'value': u'1020FFA8181C010038' },
+        
+        SamiConfigDataParticleKey.USE_BAUD_RATE_9600:   { 'type': bool,'value': False },
+        SamiConfigDataParticleKey.SEND_RECORD_TYPE_EARLY:{'type': bool,'value': True },
+        SamiConfigDataParticleKey.SEND_LIVE_RECORDS:    { 'type': bool,'value': True },
+        SamiConfigDataParticleKey.PUMP_PULSE:           { 'type': int, 'value': 0x10 },
+        SamiConfigDataParticleKey.PUMP_ON_TO_MEAURSURE: { 'type': int, 'value': 0x20 },
+        SamiConfigDataParticleKey.SAMPLES_PER_MEASURE:  { 'type': int, 'value': 0xFF },
+        SamiConfigDataParticleKey.CYCLES_BETWEEN_BLANKS:{ 'type': int, 'value': 0xA8 },
+        SamiConfigDataParticleKey.NUM_REAGENT_CYCLES:   { 'type': int, 'value': 0x18 },
+        SamiConfigDataParticleKey.NUM_BLANK_CYCLES:     { 'type': int, 'value': 0x1C },
+        SamiConfigDataParticleKey.FLUSH_PUMP_INTERVAL:  { 'type': int, 'value': 0x1 },
+        SamiConfigDataParticleKey.BLANK_FLUSH_ON_START: { 'type': bool,'value': True },
+        SamiConfigDataParticleKey.PUMP_PULSE_POST_MEASURE: { 'type': bool,'value': False },
+        SamiConfigDataParticleKey.NUM_EXTRA_PUMP_CYCLES:{ 'type': int, 'value': 0x38 },                         
         SamiConfigDataParticleKey.CFG_SERIAL_SETTINGS:  { 'type': unicode, 'value': u'10010120256400043338333500' }
     }
     
@@ -239,7 +255,6 @@ class DataParticleMixin(DriverTestMixin):
         @param data_particle:  SamiConfigDataParticle data particle
         @param verify_values:  bool, should we verify parameter values
         '''
-        log.debug("in assert_particle_configuration")
         self.assert_data_particle_header(data_particle, DataParticleType.CONFIG_PARSED)
         self.assert_data_particle_parameters(data_particle, self._config_parameters, verify_values)
         
@@ -249,7 +264,6 @@ class DataParticleMixin(DriverTestMixin):
         @param data_particle:  SamiStatusDataParticle data particle
         @param verify_values:  bool, should we verify parameter values
         '''
-        log.debug("in assert_particle_status")
         self.assert_data_particle_header(data_particle, DataParticleType.STATUS_PARSED)
         self.assert_data_particle_parameters(data_particle, self._status_parameters, verify_values)
 
@@ -259,7 +273,6 @@ class DataParticleMixin(DriverTestMixin):
         @param data_particle:  SamiRecordDataParticle data particle
         @param verify_values:  bool, should we verify parameter values
         '''
-        log.debug("in assert_particle_record_data")
         self.assert_data_particle_header(data_particle, DataParticleType.RECORD_PARSED)
         self.assert_data_particle_parameters(data_particle, self._data_record_parameters, verify_values)
 
@@ -298,13 +311,10 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         self.assert_enum_has_no_duplicates(Capability())
         self.assert_enum_complete(Capability(), ProtocolEvent())
 
-
     def test_chunker(self):
         """
         Test the chunker and verify the particles created.
         """
-        log.debug("Testing Chunker: %s" % "Got Here")
-
         chunker = StringChunker(Protocol.sieve_function)
 
         test_data = SAMPLE_STATUS_DATA      
@@ -459,7 +469,6 @@ class DriverQualificationTest(InstrumentDriverQualificationTestCase):
         """
         @brief This test manually tests that the Instrument Driver properly supports direct access to the physical instrument. (telnet mode)
         """
-        log.debug("CJC: All Good ")
         
  #       self.assert_direct_access_start_telnet()
  #       self.assertTrue(self.tcp_client)
@@ -470,29 +479,30 @@ class DriverQualificationTest(InstrumentDriverQualificationTestCase):
 
 #       self.assert_direct_access_stop_telnet()
         
-    def test_poll(self):
-        '''
-        No polling for a single sample
-        '''
+#    def test_poll(self):
+#        '''
+#        No polling for a single sample
+#        '''
+#       # Poll for a sample and confirm result.
+#        sample1 = self.driver_client.cmd_dvr('execute_resource', Capability.ACQUIRE_SAMPLE)
+#        log.debug("SAMPLE1 = " + str(sample1[1]))
 
 
     def test_autosample(self):
         '''
         start and stop autosample and verify data particle
         '''
-
-
+        Pass
+        
     def test_get_set_parameters(self):
         '''
         verify that all parameters can be get set properly, this includes
         ensuring that read only parameters fail on set.
         '''
-        self.assert_enter_command_mode()
-
+        Pass
 
     def test_get_capabilities(self):
         """
         @brief Walk through all driver protocol states and verify capabilities
         returned by get_current_capabilities
         """
-        self.assert_enter_command_mode()
