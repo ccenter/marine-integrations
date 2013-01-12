@@ -28,6 +28,7 @@ from mi.core.instrument.instrument_driver import DriverEvent
 from mi.core.instrument.instrument_driver import DriverAsyncEvent
 from mi.core.instrument.instrument_driver import DriverProtocolState
 from mi.core.instrument.instrument_driver import DriverParameter
+from mi.core.instrument.protocol_param_dict import ParameterDictVisibility
 from mi.core.instrument.instrument_driver import ResourceAgentState
 from mi.core.instrument.data_particle import DataParticle
 from mi.core.instrument.data_particle import DataParticleKey
@@ -41,17 +42,21 @@ NEWLINE = '\r\n'
 TIMEOUT = 10
 
 # This will decode n+1 chars for {n}
-STATUS_REGEX = r'[:](\w[0-9A-Fa-f]{4})(\w[0-9A-Fa-f]{3}).*?\r\n'
-STATUS_REGEX_MATCHER = re.compile(STATUS_REGEX)
+DEVICE_STATUS_REGEX = r'[:](\w[0-9A-Fa-f]{4})(\w[0-9A-Fa-f]{3}).*?\r\n'
+DEVICE_STATUS_REGEX_MATCHER = re.compile(DEVICE_STATUS_REGEX)
 
 RECORD_TYPE4_REGEX = r'[*](\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f]{7})+.*?\r\n'
 RECORD_TYPE4_REGEX_MATCHER = re.compile(RECORD_TYPE4_REGEX)
 
-CONFIG_REGEX = r'[C](\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{17})(\w[0-9A-Fa-f]{25})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f]{1}).*?\r\n'
+CONFIG_REGEX_OLD = r'[C](\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{17})(\w[0-9A-Fa-f]{25})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f]{1}).*?\r\n'
+CONFIG_REGEX = r'[C](\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{25})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f]{1}).*?\r\n'
 CONFIG_REGEX_MATCHER = re.compile(CONFIG_REGEX)
 
 ERROR_REGEX = r'\?\w[0-9A-Fa-f]{1}.*?\r\n'
 ERROR_REGEX_MATCHER = re.compile(ERROR_REGEX)
+
+IMMEDIATE_STATUS_REGEX = r'(\w[0-9A-Fa-f]{1})(w[0-9A-Fa-f]{1}).*?\r\n'
+IMMEDIATE_STATUS_REGEX_MATCHER = re.compile(IMMEDIATE_STATUS_REGEX)
 
 # Record information received from instrument may be data or control.
 # Record types are Control or Data.
@@ -69,10 +74,9 @@ RECORD_CTRL_RTS_ENABLE = 0x85  # RTS Handshake is on.
 ###
 
 class DataParticleType(BaseEnum):
-#    RAW = CommonDataParticleType.RAW
-    DEVICE_STATUS = 'device_status_parsed'
-    STATUS_PARSED = 'status_parsed'
-    STATUS_SWBUS_PARSED = 'status_sw_bus_parsed'
+    RAW = CommonDataParticleType.RAW
+    DEVICE_STATUS_PARSED = 'device_status_parsed'
+    IMMEDIATE_STATUS_PARSED = 'immediate_status_parsed'
     CONFIG_PARSED = 'config_parsed'
     RECORD_PARSED = 'record_parsed'
 
@@ -84,9 +88,12 @@ class InstrumentCmds(BaseEnum):
     """
     SET_CONFIGURATION = 'L5A'
     READ_CONFIGURATION = 'L'
-    DISPLAY_STATUS = 'I'
+    IMMEDIATE_STATUS = 'I'
     QUIT_SESSION = 'Q'
-    READ_SAMPLE = 'R'
+    TAKE_SAMPLE = 'R'
+    DEVICE_STATUS = 'S'
+    AUTO_STATUS_ON = 'F'
+    AUTO_STATUS_OFF = 'F5A'
 
     
 class ProtocolState(BaseEnum):
@@ -116,9 +123,10 @@ class ProtocolEvent(BaseEnum):
     DISCOVER = DriverEvent.DISCOVER
 
     ### Common driver commands, should these be promoted?  What if the command isn't supported?
-    ACQUIRE_SAMPLE = DriverEvent.ACQUIRE_SAMPLE
     START_AUTOSAMPLE = DriverEvent.START_AUTOSAMPLE
     STOP_AUTOSAMPLE = DriverEvent.STOP_AUTOSAMPLE
+    
+    ACQUIRE_SAMPLE = DriverEvent.ACQUIRE_SAMPLE
     ACQUIRE_STATUS = DriverEvent.ACQUIRE_STATUS
     EXECUTE_DIRECT = DriverEvent.EXECUTE_DIRECT
     FORCE_STATE = DriverEvent.FORCE_STATE
@@ -139,9 +147,9 @@ class Capability(BaseEnum):
     """
     Protocol events that should be exposed to users (subset of above).
     """
-    ACQUIRE_SAMPLE = ProtocolEvent.ACQUIRE_SAMPLE
+    ACQUIRE_SAMPLE   = ProtocolEvent.ACQUIRE_SAMPLE
     START_AUTOSAMPLE = ProtocolEvent.START_AUTOSAMPLE
-    STOP_AUTOSAMPLE = ProtocolEvent.STOP_AUTOSAMPLE
+    STOP_AUTOSAMPLE  = ProtocolEvent.STOP_AUTOSAMPLE
     CLOCK_SYNC = ProtocolEvent.CLOCK_SYNC
     ACQUIRE_STATUS  = ProtocolEvent.ACQUIRE_STATUS
     
@@ -152,19 +160,93 @@ class Parameter(DriverParameter):
     """
     Device specific parameters.
     """
-    # DS
-    TIMESTAMP = 'TIMESTAMP'
+    # Configuration Parameter Information.
+    CFG_PROGRAM_DATE = 'program_date'   # TIMESTAMP = 'TIMESTAMP'
+    CFG_START_TIME_OFFSET = 'start_time_offset'
+    CFG_RECORDING_TIME = 'recording_time'
+    
+    # Mode Bits.
+    CFG_PMI_SAMPLE_SCHEDULE = 'pmi_sample_schedule'
+    CFG_SAMI_SAMPLE_SCHEDULE = 'sami_sample_schedule'
+    CFG_SLOT1_FOLLOWS_SAMI_SCHEDULE = 'slot1_follows_sami_sample'
+    CFG_SLOT1_INDEPENDENT_SCHEDULE  = 'slot1_independent_schedule'
+    CFG_SLOT2_FOLLOWS_SAMI_SCHEDULE = 'slot2_follows_sami_sample'
+    CFG_SLOT2_INDEPENDENT_SCHEDULE  = 'slot2_independent_schedule'
+    CFG_SLOT3_FOLLOWS_SAMI_SCHEDULE = 'slot3_follows_sami_sample'
+    CFG_SLOT3_INDEPENDENT_SCHEDULE  = 'slot3_independent_schedule'
+    
+    # Timer,Device,Pointer Triples
+    CFG_TIMER_INTERVAL_SAMI = 'timer_interval_sami'     # TIMER_INTERVAL
+    CFG_DRIVER_ID_SAMI = 'driver_id_sami'
+    CFG_PARAMETER_POINTER_SAMI = 'parameter_pointer_sami'
+    CFG_TIMER_INTERVAL_1 = 'timer_interval_1'
+    CFG_DRIVER_ID_1 = 'driver_id_1'
+    CFG_PARAMETER_POINTER_1 = 'parameter_pointer_1'
+    CFG_TIMER_INTERVAL_2 = 'timer_interval_2'
+    CFG_DRIVER_ID_2 = 'driver_id_2'
+    CFG_PARAMETER_POINTER_2 = 'parameter_pointer_2'
+    CFG_TIMER_INTERVAL_3 = 'timer_interval_3'
+    CFG_DRIVER_ID_3 = 'driver_id_3'
+    CFG_PARAMETER_POINTER_3 = 'parameter_pointer_3'
+    CFG_TIMER_INTERVAL_PRESTART = 'timer_interval_prestart'
+    CFG_DRIVER_ID_PRESTART = 'driver_id_prestart'
+    CFG_PARAMETER_POINTER_PRESTART = 'parameter_pointer_prestart'
+    
+    # GLobal Configuration Register
+    CFG_USE_BAUD_RATE_57600 = 'use_baud_rate_57600'
+    CFG_SEND_RECORD_TYPE_EARLY = 'send_recordtype_early'
+    CFG_SEND_LIVE_RECORDS = 'send_live_records'
+    CFG_EXTEND_GLOBAL_CONFIG = 'extend_global_config'
+    
+    # CO2-Settings
+    CFG_PUMP_PULSE = 'pump_pulse'
+    CFG_PUMP_ON_TO_MEASURE = 'pump_on_to_measure'
+    CFG_SAMPLES_PER_MEASURE = 'samples_per_measure'
+    CFG_CYCLES_BETWEEN_BLANKS = 'cycles_between_blanks'
+    CFG_NUM_REAGENT_CYCLES = 'num_reagent_cycles'
+    CFG_NUM_BLANK_CYCLES = 'num_blank_cycles'
+    CFG_FLUSH_PUMP_INTERVAL = 'flush_pump_interval'
+    CFG_BLANK_FLUSH_ON_START_DISABLE = 'blank_flush_on_start'
+    CFG_PUMP_PULSE_POST_MEASURE = 'pump_pulse_post_measure'
+    CFG_CYCLE_DATA = 'cycle_data'
+    
+    CFG_SERIAL_SETTINGS = 'serial_settings'
+    
+    # Immediate Status
+    IS_PUMP_ON = 'pump_on'
+    IS_VALVE_ON = 'value_on'
+    IS_EXTERNAL_POWER_ON = 'external_power_on'
+    IS_DEBUG_LED = 'debug_led'
+    IS_DEBUG_ECHO = 'debug_echo'
+    
+    # Regular Device Status
+    DS_ELAPSED_CONFIG_TIME = 'elapsed_config_time'
+    DS_CLOCK_ACTIVE = 'clock_active'
+    DS_RECORDING_ACTIVE = 'recording_active'
+    DS_RECORD_END_ON_TIME = 'record_end_on_time'
+    DS_RECORD_MEMORY_FULL = 'record_memory_full'
+    DS_RECORD_END_ON_ERROR = 'record_end_on_error'
+    DS_DATA_DOWNLOAD_OK = 'data_download_ok'
+    DS_FLASH_MEMORY_OPEN = 'flash_memory_open'
+    DS_BATTERY_ERROR_FATAL = 'battery_error_fatal'
+    DS_BATTERY_LOW_MEASUREMENT = 'battery_low_measurement'
+    DS_BATTERY_LOW_BLANK = 'battery_low_blank'
+    DS_BATTERY_LOW_EXTERNAL = 'battery_low_external'
+    DS_EXTERNAL_DEVICE_FAULT = 'external_device_fault'
+    DS_FLASH_ERASED = 'flash_erased'
+    DS_POWER_ON_INVALID = 'power_on_invalid'
     
 # Device prompts.
 class Prompt(BaseEnum):
     """
     Device i/o prompts..
     """
-    STATUS_COMMAND = 'I'
+    IMMEDIATE_STATUS_COMMAND = 'I'
     BAD_COMMAND = '?'
     CONFIG_COMMAND = 'L'
+    DEVICE_STATUS_COMMAND = 'S'
     CONFIRMATION_PROMPT = 'proceed Y/N ?'
-
+    
 # Common utilities.    
 def calc_crc(s, num_points):
     cs = 0
@@ -195,6 +277,7 @@ class SamiRecordDataParticle(DataParticle):
     Routines for parsing raw data into a data particle structure. Override
     the building of values, and the rest should come along for free.
     """
+    # Record information received from instrument may be data or control.
     _data_particle_type = DataParticleType.RECORD_PARSED
 
     def _build_parsed_values(self):
@@ -256,17 +339,13 @@ class SamiRecordDataParticle(DataParticle):
     
             txt = self.raw_data[idx:idx+2]
             checksum = int(txt, 16)
-    
             # Compute the checksum now that we have the record length.
             # Skip over the ID character and the 1st byte (+3)
-            cs = 0
-            cs_num_bytes = record_length - 1
-            k = 3
-            for i in range(cs_num_bytes):
-                j = int(self.raw_data[k:k+2],16)
-                cs = (cs + j)
-                k = k + 2
-            cs = cs & 0xFF        
+            # Compute the checksum for the entire record & compare with data.
+            num_bytes = (record_length - 1)
+            num_char = 2 * num_bytes
+            cs = calc_crc( self.raw_data[3:3+num_char], num_bytes)
+            log.debug("Record Checksup = " + str(hex(checksum)) + " versus " + str(hex(cs)))
             
         result = [{DataParticleKey.VALUE_ID: SamiRecordDataParticleKey.UNIQUE_ID,
                    DataParticleKey.VALUE: unique_id},
@@ -288,31 +367,51 @@ class SamiRecordDataParticle(DataParticle):
         return result
     
 class SamiConfigDataParticleKey(BaseEnum):
-    CFG_PROGRAM_DATE = 'program_date'
-    CFG_START_TIME_OFFSET = 'start_offset'
-    CFG_RECORDING_TIME = 'recording_time'
-    CFG_MODE = 'mode'
-    CFG_TIMER_INTERVAL_0 = 'timer_interval_0'
-    CFG_DRIVER_ID_0 = 'driver_id_0'
-    CFG_PARAM_PTR_0 = 'param_ptr_0'
-    CFG_TIMER_INTERVAL_1 = 'timer_interval_1'
-    CFG_DRIVER_ID_1 = 'driver_id_1'
-    CFG_PARAM_PTR_1 = 'param_ptr_1'
-    CFG_TIMER_INTERVAL_2 = 'timer_interval_2'
-    CFG_DRIVER_ID_2 = 'driver_id_2'
-    CFG_PARAM_PTR_2 = 'param_ptr_2'
-    CFG_TIMER_INTERVAL_3 = 'timer_interval_3'
-    CFG_DRIVER_ID_3 = 'driver_id_3'
-    CFG_PARAM_PTR_3 = 'param_ptr_3'
-    CFG_TIMER_INTERVAL_4 = 'timer_interval_4'
-    CFG_DRIVER_ID_4 = 'driver_id_4'
-    CFG_PARAM_PTR_4 = 'param_ptr_4'
+    PROGRAM_DATE = 'program_date'
+    START_TIME_OFFSET = 'start_offset'
+    RECORDING_TIME = 'recording_time'
+	# Mode Bits.
+    PMI_SAMPLE_SCHEDULE = 'pmi_sample_schedule'
+    SAMI_SAMPLE_SCHEDULE = 'sami_sample_schedule'
+    SLOT1_FOLLOWS_SAMI_SCHEDULE = 'slot1_follows_sami_sample'
+    SLOT1_INDEPENDENT_SCHEDULE  = 'slot1_independent_schedule'
+    SLOT2_FOLLOWS_SAMI_SCHEDULE = 'slot2_follows_sami_sample'
+    SLOT2_INDEPENDENT_SCHEDULE  = 'slot2_independent_schedule'
+    SLOT3_FOLLOWS_SAMI_SCHEDULE = 'slot3_follows_sami_sample'
+    SLOT3_INDEPENDENT_SCHEDULE  = 'slot3_independent_schedule'
+	
+    # Timer,Device,Pointer Triples
+    TIMER_INTERVAL_SAMI = 'timer_interval_sami'
+    DRIVER_ID_SAMI = 'driver_id_sami'
+    PARAM_PTR_SAMI = 'param_ptr_sami'
+    TIMER_INTERVAL_1 = 'timer_interval_1'
+    DRIVER_ID_1 = 'driver_id_1'
+    PARAM_PTR_1 = 'param_ptr_1'
+    TIMER_INTERVAL_2 = 'timer_interval_2'
+    DRIVER_ID_2 = 'driver_id_2'
+    PARAM_PTR_2 = 'param_ptr_2'
+    TIMER_INTERVAL_3 = 'timer_interval_3'
+    DRIVER_ID_3 = 'driver_id_3'
+    PARAM_PTR_3 = 'param_ptr_3'
+    TIMER_INTERVAL_PRESTART = 'timer_interval_prestart'
+    DRIVER_ID_PRESTART = 'driver_id_prestart'
+    PARAM_PTR_PRESTART = 'param_ptr_prestart'
     
     # Global Configuration Settings Register for PCO2    
-    USE_BAUD_RATE_9600 = "use_baud_rate_9600"
+    USE_BAUD_RATE_57600 = "use_baud_rate_57600"
     SEND_RECORD_TYPE_EARLY = "send_record_type_early"
     SEND_LIVE_RECORDS = "send_live_records"
-    
+
+	# CO2 Settings
+    PMI_SAMPLE_SCHEDULE = "pmi_sample_schedule"    
+    SAMI_SAMPLE_SCHEDULE = "sami_sample_schedule"
+    SLOT1_FOLLOWS_SAMI_SAMPLE  = "slot1_follows_sami_sample"
+    SLOT1_INDEPENDENT_SCHEDULE = "slot1_independent_schedule"
+    SLOT2_FOLLOWS_SAMI_SAMPLE  = "slot2_follows_sami_sample"
+    SLOT2_INDEPENDENT_SCHEDULE = "slot2_independent_schedule"
+    SLOT3_FOLLOWS_SAMI_SAMPLE  = "slot3_follows_sami_sample"
+    SLOT3_INDEPENDENT_SCHEDULE = "slot3_independent_schedule"
+
     # PCO2 Pump Driver
     PUMP_PULSE = "pump_pulse"
     PUMP_ON_TO_MEAURSURE = "pump_on_to_measure"
@@ -321,12 +420,13 @@ class SamiConfigDataParticleKey(BaseEnum):
     NUM_REAGENT_CYCLES = "num_reagent_cycles"
     NUM_BLANK_CYCLES = "num_blank_cycles"
     FLUSH_PUMP_INTERVAL = "flush_pump_interval"
-    BLANK_FLUSH_ON_START = "blank_flush_on_start"
+    BLANK_FLUSH_ON_START_DISABLE = "blank_flush_on_start_disable"
     PUMP_PULSE_POST_MEASURE = "pump_pulse_post_measure"
-    NUM_EXTRA_PUMP_CYCLES = "num_extra_pump_cycles"
+    CYCLE_DATA = "cycle_data"
+    CHECKSUM = "checksum"
     
     # Not currently decoded
-    CFG_SERIAL_SETTINGS = 'serial_settings'
+    SERIAL_SETTINGS = 'serial_settings'
         
 class SamiConfigDataParticle(DataParticle):
     """
@@ -334,13 +434,31 @@ class SamiConfigDataParticle(DataParticle):
     the building of values, and the rest should come along for free.
     """
     _data_particle_type = DataParticleType.CONFIG_PARSED
-    config_crc = None  # Last downloaded configuration CRC value.
+    _config_crc = None  # Last downloaded configuration CRC value.
 
     def _build_parsed_values(self):
         # Restore the first character we removed for recognition.
         # TODO: Improve logic to not rely on 1st character of "C"
+
+		# Mode Data Bit Definitions.
+        MODE_PMI_SAMPLE_SCHEDULE = 0x01           # Prestart Schedule Enabled.
+        MODE_SAMI_SAMPLE_SCHEDULE = 0x02          # Sami Schedule Enabled
+        MODE_SLOT1_FOLLOWS_SAMI_SAMPLE  = 0x04    # External Device-1
+        MODE_SLOT1_INDEPENDENT_SCHEDULE = 0x08
+        MODE_SLOT2_FOLLOWS_SAMI_SAMPLE  = 0x10    # External Device-2
+        MODE_SLOT2_INDEPENDENT_SCHEDULE = 0x20    
+        MODE_SLOT3_FOLLOWS_SAMI_SAMPLE  = 0x40     # External Device-3
+        MODE_SLOT3_INDEPENDENT_SCHEDULE = 0x80
+        
+		# Global Configuration Data Bits Definitions.  
+        CFG_GLOBAL_BAUD_RATE_57600 = 0x1
+        CFG_GLOBAL_SEND_RECORD_TYPE_EARLY = 0x2
+        CFG_GLOBAL_SEND_LIVE_RECORDS = 0x4
+        
+        # Restore the first character that was used as an indentifier.
         raw_data = "C" + self.raw_data
         regex1 = CONFIG_REGEX_MATCHER
+
         match = regex1.match(raw_data)
         if not match:
             raise SampleException("No regex match of parsed config data: [%s]" % raw_data)
@@ -348,24 +466,40 @@ class SamiConfigDataParticle(DataParticle):
         program_date = None
         start_time_offset = None
         recording_time = None
-        mode = None
+
+		# Mode Bits
+        pmi_sample_schedule = None
+        sami_sample_schedule = None
+        slot1_follows_sami_sample  = None
+        slot1_independent_schedule = None
+        slot2_follows_sami_sample  = None
+        slot2_independent_schedule = None
+        slot3_follows_sami_sample  = None
+        slot3_independent_schedule = None
+		
         timer_interval = []
         driver_id = []
         param_ptr = []
-        
-        co2_settings = None
-        pump_pulse = 0x10
-        pump_on_to_measure = 0x20
-        samples_per_measure = 0xFF
-        cycles_between_blanks = 0xA8
-        num_reagent_cycles = 0x18    
-        num_blank_cycles = 0x1C
-        flush_pump_interval = 0x1
+                
+		# Global Configuration Register
+        use_baud_rate_57600 = None  # 57600 / 9600
+        send_record_type_early = None
+        send_live_records = None
+
+		# CO2 Settings.
+        pump_pulse = None
+        pump_on_to_measure = None
+        samples_per_measure = None
+        cycles_between_blanks = None
+        num_reagent_cycles = None    
+        num_blank_cycles = None
+        flush_pump_interval = None
         bit_switch = None
-        blank_flush_on_start = False
-        pump_pulse_post_measure = False
-        num_extra_pump_cycles = 0x38
+        blank_flush_on_start_disable = None
+        pump_pulse_post_measure = None
+        cycle_data = None
         
+        # Not used and hard-coded right now.
         serial_settings = None
 
         # Decode Time Stamp since Launch       
@@ -378,12 +512,18 @@ class SamiConfigDataParticle(DataParticle):
         txt = match.group(3)
         recording_time = int(txt,16)
 
-        # Decode the Mode Bits.
         txt = match.group(4)
-        mode = int(txt,16);        
+        mode = int(txt,16);          
+        pmi_sample_schedule  = ((mode & MODE_PMI_SAMPLE_SCHEDULE) == MODE_PMI_SAMPLE_SCHEDULE)
+        sami_sample_schedule = ((mode & MODE_SAMI_SAMPLE_SCHEDULE) == MODE_SAMI_SAMPLE_SCHEDULE)
+        slot1_follows_sami_sample  = ((mode & MODE_SLOT1_FOLLOWS_SAMI_SAMPLE)  == MODE_SLOT1_FOLLOWS_SAMI_SAMPLE)
+        slot1_independent_schedule = ((mode & MODE_SLOT1_INDEPENDENT_SCHEDULE) == MODE_SLOT1_INDEPENDENT_SCHEDULE)
+        slot2_follows_sami_sample  = ((mode & MODE_SLOT2_FOLLOWS_SAMI_SAMPLE)  == MODE_SLOT2_FOLLOWS_SAMI_SAMPLE)
+        slot2_independent_schedule = ((mode & MODE_SLOT2_INDEPENDENT_SCHEDULE) == MODE_SLOT2_INDEPENDENT_SCHEDULE)
+        slot3_follows_sami_sample  = ((mode & MODE_SLOT3_FOLLOWS_SAMI_SAMPLE)  == MODE_SLOT3_FOLLOWS_SAMI_SAMPLE)
+        slot3_independent_schedule = ((mode & MODE_SLOT3_INDEPENDENT_SCHEDULE) == MODE_SLOT3_INDEPENDENT_SCHEDULE)
+
         idx = 5
-        
-        # Decode data.
         device_group = []
         for i in range(5):
             txt = match.group(idx)
@@ -402,42 +542,60 @@ class SamiConfigDataParticle(DataParticle):
         # The next byte is the Global Configuration Switches.
         txt = match.group(idx)
         idx = idx + 1
-        global_parameter_switch = int(txt,16)
-        use_baud_rate_9600     = ((global_parameter_switch & 0x1) != 0x1);
-        send_record_type_early = ((global_parameter_switch & 0x2) == 0x2);
-        send_live_records      = ((global_parameter_switch & 0x4) == 0x4);
-        log.debug("Config Bits: " + str(global_parameter_switch))
+        cfg_reg = int(txt,16)
+        use_baud_rate_57600    = ((cfg_reg & CFG_GLOBAL_BAUD_RATE_57600) == CFG_GLOBAL_BAUD_RATE_57600)
+        send_record_type_early = ((cfg_reg & CFG_GLOBAL_SEND_RECORD_TYPE_EARLY) == CFG_GLOBAL_SEND_RECORD_TYPE_EARLY)
+        send_live_records      = ((cfg_reg & CFG_GLOBAL_SEND_LIVE_RECORDS) == CFG_GLOBAL_SEND_LIVE_RECORDS)
                 
         # Decode the PCO2 Configruation Parameters
         txt = match.group(idx)
         idx = idx + 1
-        co2_settings = txt
-        
-        pump_pulse            = int(co2_settings[0:2],16)
-        pump_on_to_measure    = int(co2_settings[2:4],16)
-        samples_per_measure   = int(co2_settings[4:6],16)
-        cycles_between_blanks = int(co2_settings[6:8],16)
-        num_reagent_cycles    = int(co2_settings[8:10],16)
-        num_blank_cycles      = int(co2_settings[10:12],16)
-        flush_pump_interval   = int(co2_settings[12:14],16)
-        bit_switch            = int(co2_settings[14:16],16)
-        num_extra_pump_cycles = int(co2_settings[16:18],16)
-        
-        # Decode the Bit Switches for driver 4.
-        blank_flush_on_start    = ((bit_switch & 0x1) != 0x1)  # 1=Don't start with Blank Flush
-        pump_pulse_post_measure = ((bit_switch & 0x2) == 0x2)  # Measure after each Pump Pulse.
+        pump_pulse = int(txt,16)
+
+        txt = match.group(idx)
+        idx = idx + 1
+        pump_on_to_measure = int(txt,16)
+
+        txt = match.group(idx)
+        idx = idx + 1
+        samples_per_measure = int(txt,16)
+
+        txt = match.group(idx)
+        idx = idx + 1
+        cycles_between_blanks = int(txt,16)
+
+        txt = match.group(idx)
+        idx = idx + 1
+        num_reagent_cycles = int(txt,16)
+		
+        txt = match.group(idx)
+        idx = idx + 1
+        num_blank_cycles = int(txt,16)
+
+        txt = match.group(idx)
+        idx = idx + 1
+        flush_pump_interval = int(txt,16)
+
+        txt = match.group(idx)
+        idx = idx + 1
+        bit_switch = int(txt,16)
+        blank_flush_on_start_disable = (bit_switch & 0x1) == 0x1
+        pump_pulse_post_measure = (bit_switch & 0x2) == 0x2
+
+        txt = match.group(idx)
+        idx = idx + 1
+        cycle_data = int(txt,16)
     
-#        log.debug("pump_pulse = " + str(hex(pump_pulse)))
-#        log.debug("pump_on_to_measure = " + str(hex(pump_on_to_measure)))
-#        log.debug("samples_per_measure = " + str(hex(samples_per_measure)))
-#        log.debug("cycles_between_blanks = " + str(hex(cycles_between_blanks)))
-#        log.debug("num_reagent_cycles = " + str(hex(num_reagent_cycles)))
-#        log.debug("num_blank_cycles = " + str(hex(num_blank_cycles)))
-#        log.debug("flush_pump_interval = " + str(hex(flush_pump_interval)))
-#        log.debug("bit_switch = " + str(hex(bit_switch)))                   
-#       log.debug("num_extra_pump_cycles = " + str(hex(num_extra_pump_cycles)))
+        log.debug("pump_pulse = " + str(hex(pump_pulse)))
+        log.debug("pump_on_to_measure = " + str(hex(pump_on_to_measure)))
+        log.debug("samples_per_measure = " + str(hex(samples_per_measure)))
+        log.debug("cycles_between_blanks = " + str(hex(cycles_between_blanks)))
+        log.debug("num_reagent_cycles = " + str(hex(num_reagent_cycles)))
+        log.debug("num_blank_cycles = " + str(hex(num_blank_cycles)))
+        log.debug("flush_pump_interval = " + str(hex(flush_pump_interval)))
+        log.debug("bit_switch = " + str(hex(bit_switch)))                   
+        log.debug("cycle_data = " + str(hex(cycle_data)))
         
-        # Serial settings for alternate devices.
         txt = match.group(idx)
         idx = idx + 1
         serial_settings = txt
@@ -449,46 +607,61 @@ class SamiConfigDataParticle(DataParticle):
         # print("Meaningless parameter: " + m0.group(idx) )
         # idx = idx + 1
     
-        result = [{DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_PROGRAM_DATE,
+        result = [{DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PROGRAM_DATE,
                    DataParticleKey.VALUE: program_date},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_START_TIME_OFFSET,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.START_TIME_OFFSET,
                    DataParticleKey.VALUE: start_time_offset},                  
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_RECORDING_TIME,
-                   DataParticleKey.VALUE: recording_time},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_MODE,
-                   DataParticleKey.VALUE: mode},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_TIMER_INTERVAL_0,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.RECORDING_TIME,
+                   DataParticleKey.VALUE: recording_time},				   
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PMI_SAMPLE_SCHEDULE,
+                   DataParticleKey.VALUE: pmi_sample_schedule},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SAMI_SAMPLE_SCHEDULE,
+                   DataParticleKey.VALUE: sami_sample_schedule},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SLOT1_FOLLOWS_SAMI_SCHEDULE,
+                   DataParticleKey.VALUE: slot1_follows_sami_sample},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SLOT1_INDEPENDENT_SCHEDULE,
+                   DataParticleKey.VALUE: slot1_independent_schedule},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SLOT2_FOLLOWS_SAMI_SCHEDULE,
+                   DataParticleKey.VALUE: slot2_follows_sami_sample},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SLOT2_INDEPENDENT_SCHEDULE,
+                   DataParticleKey.VALUE: slot2_independent_schedule},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SLOT3_FOLLOWS_SAMI_SCHEDULE,
+                   DataParticleKey.VALUE: slot3_follows_sami_sample},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SLOT3_INDEPENDENT_SCHEDULE,
+                   DataParticleKey.VALUE: slot3_independent_schedule},
+                  
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.TIMER_INTERVAL_SAMI,
                    DataParticleKey.VALUE: timer_interval[0]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_DRIVER_ID_0,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.DRIVER_ID_SAMI,
                    DataParticleKey.VALUE: driver_id[0]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_PARAM_PTR_0,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PARAM_PTR_SAMI,
                    DataParticleKey.VALUE: param_ptr[0]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_TIMER_INTERVAL_1,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.TIMER_INTERVAL_1,
                    DataParticleKey.VALUE: timer_interval[1]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_DRIVER_ID_1,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.DRIVER_ID_1,
                    DataParticleKey.VALUE: driver_id[1]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_PARAM_PTR_1,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PARAM_PTR_1,
                    DataParticleKey.VALUE: param_ptr[1]},     
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_TIMER_INTERVAL_2,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.TIMER_INTERVAL_2,
                    DataParticleKey.VALUE: timer_interval[2]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_DRIVER_ID_2,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.DRIVER_ID_2,
                    DataParticleKey.VALUE: driver_id[2]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_PARAM_PTR_2,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PARAM_PTR_2,
                    DataParticleKey.VALUE: param_ptr[2]},              
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_TIMER_INTERVAL_3,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.TIMER_INTERVAL_3,
                    DataParticleKey.VALUE: timer_interval[3]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_DRIVER_ID_3,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.DRIVER_ID_3,
                    DataParticleKey.VALUE: driver_id[3]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_PARAM_PTR_3,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PARAM_PTR_3,
                    DataParticleKey.VALUE: param_ptr[3]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_TIMER_INTERVAL_4,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.TIMER_INTERVAL_PRESTART,
                    DataParticleKey.VALUE: timer_interval[4]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_DRIVER_ID_4,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.DRIVER_ID_PRESTART,
                    DataParticleKey.VALUE: driver_id[4]},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_PARAM_PTR_4,
-                   DataParticleKey.VALUE: param_ptr[4]},                     
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.USE_BAUD_RATE_9600,
-                   DataParticleKey.VALUE: use_baud_rate_9600},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PARAM_PTR_PRESTART,
+                   DataParticleKey.VALUE: param_ptr[4]},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.USE_BAUD_RATE_57600,
+                   DataParticleKey.VALUE: use_baud_rate_57600},
                   {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SEND_RECORD_TYPE_EARLY,
                    DataParticleKey.VALUE: send_record_type_early},
                   {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SEND_LIVE_RECORDS,
@@ -496,7 +669,7 @@ class SamiConfigDataParticle(DataParticle):
                   {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PUMP_PULSE,
                    DataParticleKey.VALUE: pump_pulse},
                   {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PUMP_ON_TO_MEAURSURE,
-                   DataParticleKey.VALUE: pump_on_to_measure},
+                  DataParticleKey.VALUE: pump_on_to_measure},
                   {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SAMPLES_PER_MEASURE,
                    DataParticleKey.VALUE: samples_per_measure},
                   {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CYCLES_BETWEEN_BLANKS,
@@ -507,190 +680,29 @@ class SamiConfigDataParticle(DataParticle):
                    DataParticleKey.VALUE: num_blank_cycles},
                   {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.FLUSH_PUMP_INTERVAL,
                   DataParticleKey.VALUE: flush_pump_interval},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.BLANK_FLUSH_ON_START,
-                   DataParticleKey.VALUE: blank_flush_on_start},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PUMP_PULSE_POST_MEASURE,
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.BLANK_FLUSH_ON_START_DISABLE,
+                   DataParticleKey.VALUE: blank_flush_on_start_disable},
+                 {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PUMP_PULSE_POST_MEASURE,
                    DataParticleKey.VALUE: pump_pulse_post_measure},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.NUM_EXTRA_PUMP_CYCLES,
-                   DataParticleKey.VALUE: num_extra_pump_cycles},
-                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CFG_SERIAL_SETTINGS,
-                   DataParticleKey.VALUE: serial_settings} ]
-                  
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.CYCLE_DATA,
+                   DataParticleKey.VALUE: cycle_data},
+                  {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.SERIAL_SETTINGS,
+                  DataParticleKey.VALUE: serial_settings}]
         return result
-    
-    # Routines for building a configuration data line.
-    def _make_config_global_switch_settings(self):
-        cfg_reg = None;
-        
-        baud_rate_57600 = False  # 57600 / 9600
-        send_record_type_early = True
-        send_live_records = True  # Send Live Records over serial Port.
-    
-        # Global configuration switches are bit-fields in this parameter
-        cfg_reg = 0x0
-    
-        if( baud_rate_57600 == True ):
-            cfg_reg = config_reg | 0x01   # Bit-0            
-        if( send_record_type_early == True ):
-            cfg_reg = config_reg | 0x02   # Bit-1            
-        if( send_live_records == True ):
-            cfg_reg = config_reg | 0x04   # Bit-2            
-        return( cfg_reg )
-    
-    def _make_config_driver_params(self):
-        """
-        Sami CO2 Driver 4/5 Parameter Settings
-        """
-        cfg = None
-        
-        pump_pulse = 0x10
-        pump_on_to_measure = 0x20
-        num_samples_per_measure = 0xFF
-        cycles_between_blanks = 0xA8
-        num_reagent_cycles = 0x18    
-        num_blank_cycles = 0x1C
-        flush_pump_interval = 0x1
-        num_extra_pump_cycles = 0x38
 
-        # 2-bits are set for special configuration parameters.
-        bits = 0x0
-        blank_flush_on_start = True
-        pump_pulse_post_measure = False
-        if( blank_flush_on_start == False ):
-            bits |= 0x1
-        if( pump_pulse_post_measure == True ):
-            bits |= 0x2            
-        
-        # Convert settings into hex string for Sami interface.
-        cfg_driver_info = int8_to_string( pump_pulse )
-        cfg = cfg + int8_to_string( pump_on_to_measure )
-        cfg = cfg + int8_to_string( num_samples_per_measure )
-        cfg = cfg + int8_to_string( cycles_between_blanks )
-        cfg = cfg + int8_to_string( num_reagent_cycles )
-        cfg = cfg + int8_to_string( num_blank_cycles )
-        cfg = cfg + int8_to_string( flush_pump_interval )
-        cfg = cfg + int8_to_string( bits )
-        cfg = cfg + int8_to_string( num_extra_pump_cycles )
-        return(cfg)
-        
-    def _make_config_string(self):
-        config_str = None
-        
-        timestamp = time.gmtime()  # This should come from the outside world.
-        start_time = 244       # Offset from current date.
-        stop_time = 31536000   # Length of operation.
-        sample_inteval = 1800  # Seconds
-        mode = 87
-
-        secF = time.mktime(timestamp)
-        sec = int( secF ) + NSECONDS_1904_to_1970
-        timestamp_str = int32_to_string( sec )
-
-        config_str = timestamp_str        
-        config_str = config_str + int32_to_string( start_time )
-        config_str = config_str + int32_to_string( stop_time )
-        config_str = config_str + int8_to_string( mode )
-    
-        # PCO2 Measurements on on Device-4.
-        SAMI_DRIVER_ID_PCO2W = 4
-        config_str = config_str + int_to_string6( sample_inteval )
-        config_str = config_str + int8_to_string( SAMI_DRIVER_ID_PCO2W )
-        config_str = config_str + int8_to_string( 1 )  # Always 1 for SAMI
-
-        # These parameters are for the individual devices connected.
-        config_str = config_str + int_to_string6( 600 )
-        config_str = config_str + int8_to_string( 3 )
-        config_str = config_str + int8_to_string( 0xA )
-
-        config_str = config_str + int_to_string6( 600 )
-        config_str = config_str + int8_to_string( 0 )
-        config_str = config_str + int8_to_string( 0x17 )
-
-        config_str = config_str + int_to_string6( 600 )
-        config_str = config_str + int8_to_string( 01)
-        config_str = config_str + int8_to_string( 0x1A )
-
-        # Prestart Interval.
-        config_str = config_str + int_to_string6( 14400 )
-        config_str = config_str + int8_to_string( 0 )
-        config_str = config_str + int8_to_string( 0x1C )
-    
-        # Set global parameter switch.
-        global_config_reg = make_config_global_switch_settings()    
-        config_str = config_str + int8_to_string( global_config_reg )
-        log.debug(" config-string len = %" % str(len(config_str)))
-    
-        # Set driver parameters for how PCO2 data will be acquired.
-        config_str = config_str + make_config_driver_params()
-        
-        # Driver parameters for other devices.
-        config_str = config_str + "10010120256400043338333500"  # From Testing.
-        config_str = config_str + "020001"
-        config_str = config_str + "0200"
-        n = len( config_str )
-        
-        # Pad string out to 256-characters (this completes a full flash write size)
-        for i in range(n,256):
-            config_str = config_str + "0"
-        n = len( config_str )
-        config_crc = ComputeCrc( config_str, n )
-        log.debug("Configuration completed " + str(n) + " crc = " + str(config_crc) )
-        
-        # Compute the CRC. This is returned on the download.
-        return( config_str )
-        
-    # Tools for configuration.
-    def _digit_to_ascii(self, digit):
-        c = ord('0')
-        if( digit <= 9 ):
-            c = c + digit
-        else:
-            c = digit - 10 + ord('A')
-        return(chr(c))
-    
-    def int8_to_string(value):
-        msg = digit_to_ascii( (value & 0x000000F0) >> 4 )
-        msg = msg + digit_to_ascii( (value & 0x0000000F) )
-        return(msg)
-    
-    def int8_to_string(value):
-        msg = digit_to_ascii( (value & 0x000000F0) >> 4 )
-        msg = msg + digit_to_ascii( (value & 0x0000000F) )
-        return(msg)
-    
-    def int_to_string6(value):
-        msg = digit_to_ascii( (value & 0x00F00000) >> 20 )
-        msg = msg + digit_to_ascii( (value & 0x000F0000) >> 16 )
-        msg = msg + digit_to_ascii( (value & 0x0000F000) >> 12 )
-        msg = msg + digit_to_ascii( (value & 0x00000F00) >> 8 )
-        msg = msg + digit_to_ascii( (value & 0x000000F0) >> 4 )
-        msg = msg + digit_to_ascii( (value & 0x0000000F) )
-        return(msg)
-
-    def int32_to_string(value):
-        msg = digit_to_ascii( (value & 0xF0000000) >> 28 )
-        msg = msg + digit_to_ascii( (value & 0x0F000000) >> 24 )
-        msg = msg + digit_to_ascii( (value & 0x00F00000) >> 20 )
-        msg = msg + digit_to_ascii( (value & 0x000F0000) >> 16 )
-        msg = msg + digit_to_ascii( (value & 0x0000F000) >> 12 )
-        msg = msg + digit_to_ascii( (value & 0x00000F00) >> 8 )
-        msg = msg + digit_to_ascii( (value & 0x000000F0) >> 4 )
-        msg = msg + digit_to_ascii( (value & 0x0000000F) )
-        return(msg)
-
-class SamiStatusSwBusDataParticleKey(BaseEnum):
+class SamiImmediateStatusDataParticleKey(BaseEnum):
     PUMP_ON = "pump_on"
     VALVE_ON = "valve_on"
     EXTERNAL_POWER_ON = "external_power_on"
     DEBUG_LED_ON = "debug_led_on"
     DEBUG_ECHO_ON = "debug_echo_on"
     
-class SamiStatusSwBusDataParticle(DataParticle):
+class SamiImmediateStatusDataParticle(DataParticle):
     """
     Routines for parsing raw data into a data particle structure. Override
     the building of values, and the rest should come along for free.
     """
-    _data_particle_type = DataParticleType.STATUS_SWBUS_PARSED
+    _data_particle_type = DataParticleType.IMMEDIATE_STATUS_PARSED
 
     def _build_parsed_values(self):
         """
@@ -698,17 +710,41 @@ class SamiStatusSwBusDataParticle(DataParticle):
         values with appropriate tags
         @throws SampleException If there is a problem with sample creation
         """
-       
-        # Only 8-bits of information are returned.
-        txt = self.raw_data[0:2]
-        status_word = int(txt,16)
+        regex1 = IMMEDIATE_STATUS_REGEX_MATCHER
+
+        match = regex1.match(self.raw_data)
+        if not match:
+            raise SampleException("No regex match of parsed status data: [%s]" % self.raw_data)
         
-        pump_on = (status_word & 0x01) == 0x01
+        pump_on = None
+        valve_on = None
+        external_power_on = None
+        debug_led_on = None
+        debug_echo_on = None
+        
+        txt = match.group(1)
+        status_word = int(txt,16)
+        log.debug("status_word = " + str(hex(status_word)))
+        
+        pump_on  = (status_word & 0x01) == 0x01
         valve_on = (status_word & 0x02) == 0x02
         external_power_on = (status_word & 0x04) == 0x04
-        
-        debug_led_on = (status_word & 0x10) == 0        
+        debug_led_on  = (status_word & 0x10) == 0        
         debug_echo_on = (status_word & 0x20) == 0
+
+        
+        result = [{DataParticleKey.VALUE_ID: SamiImmediateStatusDataParticleKey.PUMP_ON,
+                   DataParticleKey.VALUE: pump_on},
+                  {DataParticleKey.VALUE_ID: SamiImmediateStatusDataParticleKey.VALVE_ON,
+                   DataParticleKey.VALUE: valve_on},
+                  {DataParticleKey.VALUE_ID: SamiStatusDataParticleKey.EXTERNAL_POWER_ON,
+                   DataParticleKey.VALUE: external_power_on},
+                  {DataParticleKey.VALUE_ID: SamiStatusDataParticleKey.DEBUG_LED_ON,
+                   DataParticleKey.VALUE: debug_led_on},
+                  {DataParticleKey.VALUE_ID: SamiStatusDataParticleKey.DEBUG_ECHO_ON,
+                   DataParticleKey.VALUE: debug_echo_on} ]
+       
+        return result
         
 class SamiStatusDataParticleKey(BaseEnum):
     TIME_OFFSET = "time_offset"
@@ -727,13 +763,13 @@ class SamiStatusDataParticleKey(BaseEnum):
     EXTERNAL_DEVICE_FAULT = "external_device_fault"
     FLASH_ERASED = "flash_erased"
     POWER_ON_INVALID = "power_on_invalid"
-    
+
 class SamiStatusDataParticle(DataParticle):
     """
     Routines for parsing raw data into a data particle structure. Override
     the building of values, and the rest should come along for free.
     """
-    _data_particle_type = DataParticleType.STATUS_PARSED
+    _data_particle_type = DataParticleType.DEVICE_STATUS_PARSED
 
     def _build_parsed_values(self):
         """
@@ -741,7 +777,7 @@ class SamiStatusDataParticle(DataParticle):
         values with appropriate tags
         @throws SampleException If there is a problem with sample creation
         """
-        regex1 = STATUS_REGEX_MATCHER
+        regex1 = DEVICE_STATUS_REGEX_MATCHER
 
         match = regex1.match(self.raw_data)
         if not match:
@@ -906,7 +942,6 @@ class Protocol(CommandResponseInstrumentProtocol):
         self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.ENTER, self._handler_unknown_enter)
         self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.EXIT, self._handler_unknown_exit)
         self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.DISCOVER, self._handler_unknown_discover)
-#        self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.START_DIRECT, self._handler_command_start_direct)
 
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.ENTER, self._handler_command_enter)
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.EXIT, self._handler_command_exit)
@@ -914,7 +949,10 @@ class Protocol(CommandResponseInstrumentProtocol):
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.START_DIRECT, self._handler_command_start_direct)
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.GET, self._handler_command_autosample_test_get)
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.SET, self._handler_command_set)
-        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.SET_CONFIGURATION, self._handler_command_set_configuration)
+
+        self._protocol_fsm.add_handler(ProtocolState.AUTOSAMPLE, ProtocolEvent.ENTER, self._handler_autosample_enter)
+        self._protocol_fsm.add_handler(ProtocolState.AUTOSAMPLE, ProtocolEvent.EXIT,  self._handler_autosample_exit)
+        self._protocol_fsm.add_handler(ProtocolState.AUTOSAMPLE, ProtocolEvent.STOP_AUTOSAMPLE, self._handler_autosample_stop_autosample)
 
         self._protocol_fsm.add_handler(ProtocolState.DIRECT_ACCESS, ProtocolEvent.ENTER, self._handler_direct_access_enter)
         self._protocol_fsm.add_handler(ProtocolState.DIRECT_ACCESS, ProtocolEvent.EXIT, self._handler_direct_access_exit)
@@ -926,15 +964,18 @@ class Protocol(CommandResponseInstrumentProtocol):
         self._build_param_dict()
 
         # Add build handlers for device commands.
-        self._add_build_handler(InstrumentCmds.DISPLAY_STATUS,      self._build_simple_command)
+        self._add_build_handler(InstrumentCmds.AUTO_STATUS_OFF,     self._build_simple_command)
+        self._add_build_handler(InstrumentCmds.DEVICE_STATUS,       self._build_simple_command)
+        self._add_build_handler(InstrumentCmds.IMMEDIATE_STATUS,    self._build_simple_command)
         self._add_build_handler(InstrumentCmds.READ_CONFIGURATION,  self._build_simple_command)
-        self._add_build_handler(InstrumentCmds.READ_SAMPLE,         self._build_simple_command)
+        self._add_build_handler(InstrumentCmds.TAKE_SAMPLE,         self._build_simple_command)
         self._add_build_handler(InstrumentCmds.SET_CONFIGURATION,   self._build_set_configuration_command)
         
         # Add response handlers for device commands.
-        self._add_response_handler(InstrumentCmds.DISPLAY_STATUS,    self._parse_ds_response)
-        self._add_response_handler(InstrumentCmds.READ_CONFIGURATION,self._parse_config_response)
-        self._add_response_handler(InstrumentCmds.READ_SAMPLE,       self._parse_rs_response)
+        self._add_response_handler(InstrumentCmds.DEVICE_STATUS,     self._parse_S_response)
+        self._add_response_handler(InstrumentCmds.IMMEDIATE_STATUS,  self._parse_I_response)
+        self._add_response_handler(InstrumentCmds.READ_CONFIGURATION,self._parse_cfg_response)
+        self._add_response_handler(InstrumentCmds.TAKE_SAMPLE,       self._parse_R_response)
 
         # Add sample handlers.
         # State state machine in UNKNOWN state.
@@ -950,7 +991,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         The method that splits samples
         """
-        sieve_matchers = [STATUS_REGEX_MATCHER,
+        sieve_matchers = [DEVICE_STATUS_REGEX_MATCHER,
                           RECORD_TYPE4_REGEX_MATCHER,
                           CONFIG_REGEX_MATCHER,
                           ERROR_REGEX_MATCHER]
@@ -971,7 +1012,7 @@ class Protocol(CommandResponseInstrumentProtocol):
     ########################################################################
     def _build_simple_command(self, cmd):
         """
-        Build handler for basic sbe26plus commands.
+        Build handler for basic SAMI commands.
         @param cmd the simple sbe37 command to format.
         @retval The command to be sent to the device.
         """
@@ -984,7 +1025,391 @@ class Protocol(CommandResponseInstrumentProtocol):
         and value formatting function for set commands.
         """
         # Add parameter handlers to parameter dict.
+        cfg_line_01 = CONFIG_REGEX
+        
+        #
+        # Next 2 work together to pull 2 values out of a single line.
+        #      
+        # These parameters are pulled out of the "L" Command.
+        self._param_dict.add(Parameter.CFG_PROGRAM_DATE, 
+            cfg_line_01,
+            lambda match : match.group(1), 
+            self._int32_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
 
+        self._param_dict.add(Parameter.CFG_START_TIME_OFFSET, 
+            cfg_line_01,
+            lambda match : match.group(2), 
+            self._int24_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_RECORDING_TIME, 
+            cfg_line_01,
+            lambda match : match.group(3), 
+            self._int24_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        # Configuration Mode Bits.        
+        self._param_dict.add(Parameter.CFG_PMI_SAMPLE_SCHEDULE, 
+            CONFIG_REGEX,
+            lambda match : match.group(4), 
+            self._bit0_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_SAMI_SAMPLE_SCHEDULE, 
+            CONFIG_REGEX,
+            lambda match : match.group(4), 
+            self._bit1_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_SLOT1_FOLLOWS_SAMI_SCHEDULE, 
+            CONFIG_REGEX,
+            lambda match : match.group(4), 
+            self._bit2_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_SLOT1_INDEPENDENT_SCHEDULE, 
+            CONFIG_REGEX,
+            lambda match : match.group(4), 
+            self._bit3_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_SLOT2_FOLLOWS_SAMI_SCHEDULE, 
+            CONFIG_REGEX,
+            lambda match : match.group(4), 
+            self._bit4_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_SLOT2_INDEPENDENT_SCHEDULE, 
+            CONFIG_REGEX,
+            lambda match : match.group(4), 
+            self._bit5_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_SLOT3_FOLLOWS_SAMI_SCHEDULE, 
+            CONFIG_REGEX,
+            lambda match : match.group(4), 
+            self._bit6_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_SLOT3_INDEPENDENT_SCHEDULE, 
+            CONFIG_REGEX,
+            lambda match : match.group(4), 
+            self._bit7_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        # Groups #1 of device settings (Usually the SAMI Device Information)  
+        self._param_dict.add(Parameter.CFG_TIMER_INTERVAL_SAMI,
+            CONFIG_REGEX,
+            lambda match : match.group(5), 
+            self._int24_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_DRIVER_ID_SAMI,
+            CONFIG_REGEX,
+            lambda match : match.group(6), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_PARAMETER_POINTER_SAMI,
+            CONFIG_REGEX,
+            lambda match : match.group(7), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        # Groups #2 of device settings.        
+        self._param_dict.add(Parameter.CFG_TIMER_INTERVAL_1,
+            CONFIG_REGEX,
+            lambda match : match.group(8), 
+            self._int24_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_DRIVER_ID_1,
+            CONFIG_REGEX,
+            lambda match : match.group(9), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_PARAMETER_POINTER_1,
+            CONFIG_REGEX,
+            lambda match : match.group(10), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        # Groups #3 of device settings.        
+        self._param_dict.add(Parameter.CFG_TIMER_INTERVAL_2,
+            CONFIG_REGEX,
+            lambda match : match.group(11), 
+            self._int24_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_DRIVER_ID_2,
+            CONFIG_REGEX,
+            lambda match : match.group(12), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_PARAMETER_POINTER_2,
+            CONFIG_REGEX,
+            lambda match : match.group(13), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        # Groups #4 of device settings.        
+        self._param_dict.add(Parameter.CFG_TIMER_INTERVAL_3,
+            CONFIG_REGEX,
+            lambda match : match.group(14), 
+            self._int24_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_DRIVER_ID_3,
+            CONFIG_REGEX,
+            lambda match : match.group(15), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_PARAMETER_POINTER_3,
+            CONFIG_REGEX,
+            lambda match : match.group(16), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        # Groups #5 of device settings (Prestart Information)     
+        self._param_dict.add(Parameter.CFG_TIMER_INTERVAL_PRESTART,
+            CONFIG_REGEX,
+            lambda match : match.group(17), 
+            self._int24_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_DRIVER_ID_PRESTART,
+            CONFIG_REGEX,
+            lambda match : match.group(18), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_PARAMETER_POINTER_PRESTART,
+            CONFIG_REGEX,
+            lambda match : match.group(19), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        # Global Switch Settings
+        self._param_dict.add(Parameter.CFG_USE_BAUD_RATE_57600,
+            CONFIG_REGEX,
+            lambda match : match.group(20), 
+            self._bit0_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_SEND_RECORD_TYPE_EARLY,
+            CONFIG_REGEX,
+            lambda match : match.group(20), 
+            self._bit1_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_SEND_LIVE_RECORDS,
+            CONFIG_REGEX,
+            lambda match : match.group(20), 
+            self._bit2_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.CFG_EXTEND_GLOBAL_CONFIG,
+            CONFIG_REGEX,
+            lambda match : match.group(20), 
+            self._bit7_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        # PC02 Pump Driver.
+        self._param_dict.add(Parameter.CFG_PUMP_PULSE,
+            CONFIG_REGEX,
+            lambda match : match.group(21), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_PUMP_ON_TO_MEASURE,
+            CONFIG_REGEX,
+            lambda match : match.group(22), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_SAMPLES_PER_MEASURE,
+            CONFIG_REGEX,
+            lambda match : match.group(23), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_CYCLES_BETWEEN_BLANKS,
+            CONFIG_REGEX,
+            lambda match : match.group(24), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_NUM_REAGENT_CYCLES,
+            CONFIG_REGEX,
+            lambda match : match.group(25), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_NUM_BLANK_CYCLES,
+            CONFIG_REGEX,
+            lambda match : match.group(26), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_FLUSH_PUMP_INTERVAL,
+            CONFIG_REGEX,
+            lambda match : match.group(27), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_BLANK_FLUSH_ON_START_DISABLE,
+            CONFIG_REGEX,
+            lambda match : match.group(28), 
+            self._bit0_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.CFG_PUMP_PULSE_POST_MEASURE,
+            CONFIG_REGEX,
+            lambda match : match.group(28), 
+            self._bit1_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        # CFG_CYCLE_DATA = (32 * ExtraPumpCycles) + CycleInterval.
+        # CycleInterval = CFG_CYCLE_DATA - int(CFG_CYCLE_DATA / 32)
+        self._param_dict.add(Parameter.CFG_CYCLE_DATA,
+            CONFIG_REGEX,
+            lambda match : match.group(29), 
+            self._int8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+       
+        # These strings contain fields that can be parsed.
+        self._param_dict.add(Parameter.CFG_SERIAL_SETTINGS,
+            CONFIG_REGEX,
+            lambda match : match.group(30), 
+            self._string_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        # This information is extracted from the status word.
+        self._param_dict.add(Parameter.IS_PUMP_ON,
+            IMMEDIATE_STATUS_REGEX,
+            lambda match : match.group(1),
+            self._bit0_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.IS_VALVE_ON,
+            IMMEDIATE_STATUS_REGEX,
+            lambda match : match.group(1),
+            self._bit1_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+
+        self._param_dict.add(Parameter.IS_EXTERNAL_POWER_ON,
+            IMMEDIATE_STATUS_REGEX,
+            lambda match : match.group(1),
+            self._bit2_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.IS_DEBUG_LED,
+            IMMEDIATE_STATUS_REGEX,
+            lambda match : match.group(1),
+            self._bit4_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
+        self._param_dict.add(Parameter.IS_DEBUG_ECHO,
+            IMMEDIATE_STATUS_REGEX,
+            lambda match : match.group(1),
+            self._bit5_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+               
+        # These parameters are from the "S0" Command
+        self._param_dict.add(Parameter.DS_ELAPSED_CONFIG_TIME,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(1), 
+            self._int24_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_CLOCK_ACTIVE,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit0_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_RECORDING_ACTIVE,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit1_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_RECORD_END_ON_TIME,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit2_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_RECORD_MEMORY_FULL,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit3_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_RECORD_END_ON_ERROR,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit4_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_DATA_DOWNLOAD_OK,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit5_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_FLASH_MEMORY_OPEN,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit6_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_BATTERY_ERROR_FATAL,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit7_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_BATTERY_LOW_MEASUREMENT,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_BATTERY_LOW_BLANK,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit8_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_BATTERY_LOW_EXTERNAL,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit10_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_EXTERNAL_DEVICE_FAULT,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit11_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_FLASH_ERASED,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit14_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+                             
+        self._param_dict.add(Parameter.DS_POWER_ON_INVALID,
+            DEVICE_STATUS_REGEX,
+            lambda match : match.group(2), 
+            self._bit15_to_string,
+            visibility=ParameterDictVisibility.READ_ONLY)
+        
     def _got_chunk(self, chunk):
         """
         The base class got_data has gotten a chunk from the chunker.  Pass it to extract_sample
@@ -992,55 +1417,12 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         if(self._extract_sample(SamiRecordDataParticle, RECORD_TYPE4_REGEX_MATCHER, chunk)):
             log.debug("_got_chunk of Record Data = Passed good")
-        elif(self._extract_sample(SamiStatusDataParticle, STATUS_REGEX_MATCHER, chunk)):
+        elif(self._extract_sample(SamiStatusDataParticle, DEVICE_STATUS_REGEX_MATCHER, chunk)):
             log.debug("_got_chunk of Status = Passed good")
         elif(self._extract_sample(SamiConfigDataParticle, CONFIG_REGEX_MATCHER, chunk)):
             log.debug("_got_chunk of Config = Passed good")
         else:
             log.debug("_got_chunk = Failed")
-
-    def _do_cmd_resp(self, cmd, *args, **kwargs):
-        """
-        Perform a command-response on the device.
-        @param cmd The command to execute.
-        @param args positional arguments to pass to the build handler.
-        @param timeout=timeout optional command timeout.
-        @retval resp_result The (possibly parsed) response result.
-        @raises InstrumentTimeoutException if the response did not occur in time.
-        @raises InstrumentProtocolException if command could not be built or if response
-        was not recognized.
-        """
-        
-        # Get timeout and initialize response.
-        timeout = kwargs.get('timeout', 30)
-        expected_prompt = kwargs.get('expected_prompt', InstrumentPrompts.Z_ACK)
-                            
-        # Clear line and prompt buffers for result.
-        self._linebuf = ''
-        self._promptbuf = ''
-
-        # Get the build handler.
-        build_handler = self._build_handlers.get(cmd, None)
-        if build_handler:
-            cmd_line = build_handler(cmd, *args, **kwargs)
-        else:
-            cmd_line = cmd
-
-        # Send command.
-        log.debug('_do_cmd_resp: %s(%s), timeout=%s, expected_prompt=%s (%s),' 
-                  % (repr(cmd_line), repr(cmd_line.encode("hex")), timeout, expected_prompt, expected_prompt.encode("hex")))
-        self._connection.send(cmd_line)
-
-        # Wait for the prompt, prepare result and return, timeout exception
-        (prompt, result) = self._get_response(timeout,
-                                              expected_prompt=expected_prompt)
-        resp_handler = self._response_handlers.get((self.get_current_state(), cmd), None) or \
-            self._response_handlers.get(cmd, None)
-        resp_result = None
-        if resp_handler:
-            resp_result = resp_handler(result, prompt)
-        
-        return resp_result
 
     def _filter_capabilities(self, events):
         """
@@ -1074,6 +1456,24 @@ class Protocol(CommandResponseInstrumentProtocol):
         log.debug("Testing _handler_unknown_discover")
         return (ProtocolState.COMMAND, ResourceAgentState.IDLE)
 
+    def _handler_unknown_force_state(self, *args, **kwargs):
+        """
+        Force driver into a given state for the purposes of unit testing
+        @param state=desired_state Required desired state to transition to.
+        @raises InstrumentParameterException if no st'ate parameter.
+        """
+        log.debug("************* " + repr(kwargs))
+        log.debug("************* in _handler_unknown_force_state()" + str(kwargs.get('state', None)))
+
+        state = kwargs.get('state', None)  # via kwargs
+        if state is None:
+            raise InstrumentParameterException('Missing state parameter.')
+
+        next_state = state
+        result = state
+
+        return (next_state, result)
+
     def _handler_unknown_exit(self, *args, **kwargs):
         """
         Exit unknown state.
@@ -1088,6 +1488,46 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         log.debug("Testing _handler_unknown_discover")
         return (ProtocolState.COMMAND, ResourceAgentState.IDLE)
+
+    ########################################################################
+    # Autosample handlers.
+    ########################################################################
+    def _handler_autosample_enter(self, *args, **kwargs):
+        """
+        Enter autosample state.
+        """
+        # Tell driver superclass to send a state change event.
+        # Superclass will query the state.
+
+        self._driver_event(DriverAsyncEvent.STATE_CHANGE)
+
+    def _handler_autosample_stop_autosample(self, *args, **kwargs):
+        """
+        Stop autosample and switch back to command mode.
+        @retval (next_state, result) tuple, (SBE37ProtocolState.COMMAND,
+        None) if successful.
+        @throws InstrumentTimeoutException if device cannot be woken for command.
+        @throws InstrumentProtocolException if command misunderstood or
+        incorrect prompt received.
+        """
+        next_state = None
+        next_agent_state = None
+        result = None
+
+        # Update configuration parameters and send.
+        self._do_cmd_resp(InstrumentCmds.SOFT_BREAK_SECOND_HALF,
+                          expected_prompt = InstrumentPrompts.CONFIRMATION, *args, **kwargs)
+        
+        next_state = ProtocolState.COMMAND
+        next_agent_state = ResourceAgentState.COMMAND
+
+        return (next_state, (next_agent_state, result))
+
+    def _handler_autosample_exit(self, *args, **kwargs):
+        """
+        Exit autosample state.
+        """
+        pass
 
     ########################################################################
     # Command handlers.
@@ -1114,13 +1554,6 @@ class Protocol(CommandResponseInstrumentProtocol):
         @retval (next_state, result) tuple, (None, sample dict).
         @throws InstrumentTimeoutException if device cannot be woken for command.
         @throws InstrumentProtocolException if command could not be built or misunderstood.
-        next_state = None
-        next_agent_state = None
-        result = None
-
-        result = self._do_cmd_resp(InstrumentCmds.ACQUIRE_DATA, *args, **kwargs)
-        
-        return (next_state, (next_agent_state, result))
         @throws SampleException if a sample could not be extracted from result.
         """
 
@@ -1193,7 +1626,10 @@ class Protocol(CommandResponseInstrumentProtocol):
         result = None
         log.debug("_handler_command_start_direct: entering DA mode")
         return (next_state, (next_agent_state, result))
-
+		
+    ########################################################################
+    # Autosample handlers.
+    ########################################################################
     def _handler_command_autosample_test_get(self, *args, **kwargs):
         """
         Get device parameters from the parameter dict.
@@ -1291,36 +1727,7 @@ class Protocol(CommandResponseInstrumentProtocol):
     # Private helpers.
     ########################################################################
 
-    def _build_simple_command(self, cmd):
-        """
-        Build handler for basic sbe26plus commands.
-        @param cmd the simple sbe37 command to format.
-        @retval The command to be sent to the device.
-        """
-        return cmd + NEWLINE
-
-    def _build_param_dict(self):
-        """
-        Populate the parameter dictionary with our device parameters.
-        For each parameter key, add match string, match lambda function,
-        and value formatting function for set commands.
-
-        """
-        # Add parameter handlers to parameter dict.
-
-        # DS (Device Status)
-        cfg_line_01 = CONFIG_REGEX
-        
-        #
-        # Next 2 work together to pull 2 values out of a single line.
-        #      
-        self._param_dict.add(Parameter.TIMESTAMP,
-            cfg_line_01,
-            lambda match : string.upper(match.group(1)),
-            self._string_to_int,
-            multi_match=True)
-
-    def _parse_config_response(self, response, prompt):
+    def _parse_cfg_response(self, response, prompt):
         """
         Response handler for configuration "L" command
         """
@@ -1329,7 +1736,7 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         # return the Ds as text
         match = CONFIG_REGEX_MATCHER.search(response)
-        result = {} # None
+        result = None
 
         if match:
             result = match.group(1)
@@ -1351,23 +1758,54 @@ class Protocol(CommandResponseInstrumentProtocol):
             result = match.group(1)
 
         return result
-
-    def _parse_rs_response(self, response, prompt):
+		
+    def _parse_I_response(self, response, prompt):
         """
-        Response handler for rs (Read Sample) command.
+        Response handler for Device Status command
+        """
+        result = None
+        
+        if prompt != Prompt.COMMAND:
+            raise InstrumentProtocolException('Command I not recognized: %s.' % response)
+        
+        # return the Ds as text
+        result = response
+        return result
+
+    def _parse_S_response(self, response, prompt):
+        """
+        Response handler for Device Status command
+        """
+        if prompt != Prompt.COMMAND:
+            raise InstrumentProtocolException('Command S not recognized: %s.' % response)
+
+        # return the Ds as text
+        result = response
+
+        if match:
+            result = match.group(1)
+
+        return result
+
+    def _parse_R_response(self, response, prompt):
+        """
+        Response handler for R command.
         @param response command response string.
         @param prompt prompt following command response.
         @retval sample dictionary containig c, t, d values.
         @throws InstrumentProtocolException if ts command misunderstood.
         @throws InstrumentSampleException if response did not contain a sample
         """
+        next_state = None
+        next_agent_state = None
+        result = None
 
         if prompt != Prompt.COMMAND:
             raise InstrumentProtocolException('Command R not recognized: %s', response)
 
-        result = response
+        result = self._do_cmd_resp(InstrumentCmds.TAKE_SAMPLE, *args, **kwargs)
 
-        log.debug("_parse_ts_response RETURNING RESULT=" + str(result))
+        log.debug("_parse_R_response RETURNING RESULT=" + str(result))
         return result
     
     ########################################################################
@@ -1381,5 +1819,136 @@ class Protocol(CommandResponseInstrumentProtocol):
     def _string_to_int(v):
         r = int(v,16)
         return r
+    
+   ########################################################################
+    # Static Helpers.
+    ########################################################################
+    @staticmethod
+    def _string_to_string(v):
+        return v
+
+    # Tools for configuration.
+    @staticmethod
+    def _digit_to_ascii(digit):
+        c = ord('0')
+        if( digit <= 9 ):
+            c = c + digit
+        else:
+            c = digit - 10 + ord('A')
+        return(chr(c))
+
+    @staticmethod
+    def _int8_to_string(value):
+        if not isinstance(value,int):
+            raise InstrumentParameterException('Value %s is not an int-8' % str(value))
+        else:
+            msg = _digit_to_ascii( (value & 0x000000F0) >> 4 )
+            msg = msg + _digit_to_ascii( (value & 0x0000000F) )
+            return(msg)
+
+    @staticmethod
+    def _int24_to_string(value):
+        if not isinstance(value,int):
+            raise InstrumentParameterException('Value %s is not an int-24' % str(value))
+        else:
+            msg = _digit_to_ascii( (value & 0x00F00000) >> 20 )
+            msg = msg + _digit_to_ascii( (value & 0x000F0000) >> 16 )
+            msg = msg + _digit_to_ascii( (value & 0x0000F000) >> 12 )
+            msg = msg + _digit_to_ascii( (value & 0x00000F00) >> 8 )
+            msg = msg + _digit_to_ascii( (value & 0x000000F0) >> 4 )
+            msg = msg + _digit_to_ascii( (value & 0x0000000F) )
+            return(msg)
+
+    @staticmethod
+    def _int32_to_string(value):
+        if not isinstance(value,int):
+            raise InstrumentParameterException('Value %s is not an int-32' % str(value))
+        else:
+            msg = _digit_to_ascii( (value & 0xF0000000) >> 28 )
+            msg = msg + _digit_to_ascii( (value & 0x0F000000) >> 24 )
+            msg = msg + _digit_to_ascii( (value & 0x00F00000) >> 20 )
+            msg = msg + _digit_to_ascii( (value & 0x000F0000) >> 16 )
+            msg = msg + _digit_to_ascii( (value & 0x0000F000) >> 12 )
+            msg = msg + _digit_to_ascii( (value & 0x00000F00) >> 8 )
+            msg = msg + _digit_to_ascii( (value & 0x000000F0) >> 4 )
+            msg = msg + _digit_to_ascii( (value & 0x0000000F) )
+            return(msg)
+        
+    @staticmethod
+    def _bit_to_string(self, value, field):
+        if not isinstance(value,int):
+            raise InstrumentParameterException('Value %s is not an bit' % str(value))
+        else:
+            ibit = (field << 1)
+            tmp = (value & ibit) == ibit
+            msg = _digit_to_ascii( tmp )
+            return(msg)
+
+    @staticmethod      
+    def _bit0_to_string(self, value):
+        msg = _bit_to_string(value, 0)
+        return(msg)
+    @staticmethod
+    def _bit1_to_string(self, value):
+        msg = _bit_to_string(value, 1)
+        return(msg)
+    @staticmethod
+    def _bit2_to_string(self, value):
+        msg = _bit_to_string(value, 2)
+        return(msg)
+    @staticmethod
+    def _bit3_to_string(self, value):
+        msg = _bit_to_string(value, 3)
+        return(msg)
+    @staticmethod
+    def _bit4_to_string(self, value):
+        msg = _bit_to_string(value, 4)
+        return(msg)
+    @staticmethod
+    def _bit5_to_string(self, value):
+        msg = _bit_to_string(value, 5)
+        return(msg)
+    @staticmethod
+    def _bit6_to_string(self, value):
+        msg = _bit_to_string(value, 6)
+        return(msg)
+    @staticmethod
+    def _bit7_to_string(self, value):
+        msg = _bit_to_string(value, 7)
+        return(msg)
+    @staticmethod
+    def _bit8_to_string(self, value):
+        msg = _bit_to_string(value, 8)
+        return(msg)
+    @staticmethod
+    def _bit9_to_string(self, value):
+        msg = _bit_to_string(value, 9)
+        return(msg)
+    @staticmethod
+    def _bit10_to_string(self, value):
+        msg = _bit_to_string(value, 10)
+        return(msg)
+    @staticmethod
+    def _bit11_to_string(self, value):
+        msg = _bit_to_string(value, 11)
+        return(msg)
+    @staticmethod
+    def _bit12_to_string(self, value):
+        msg = _bit_to_string(value, 12)
+        return(msg)
+    @staticmethod
+    def _bit13_to_string(self, value):
+        msg = _bit_to_string(value, 13)
+        return(msg)
+    @staticmethod
+    def _bit14_to_string(self, value):
+        msg = _bit_to_string(value, 14)
+        return(msg)
+    @staticmethod
+    def _bit15_to_string(self, value):
+        msg = _bit_to_string(value, 15)
+        return(msg)
+        
+
     
 
