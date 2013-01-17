@@ -28,8 +28,9 @@ from mi.core.instrument.instrument_driver import DriverEvent
 from mi.core.instrument.instrument_driver import DriverAsyncEvent
 from mi.core.instrument.instrument_driver import DriverProtocolState
 from mi.core.instrument.instrument_driver import DriverParameter
-from mi.core.instrument.protocol_param_dict import ParameterDictVisibility
 from mi.core.instrument.instrument_driver import ResourceAgentState
+from mi.core.exceptions import InstrumentParameterException
+from mi.core.instrument.protocol_param_dict import ParameterDictVisibility
 from mi.core.instrument.data_particle import DataParticle
 from mi.core.instrument.data_particle import DataParticleKey
 from mi.core.instrument.data_particle import CommonDataParticleType
@@ -87,7 +88,7 @@ class InstrumentCmds(BaseEnum):
     execute the command.
     """
     SET_CONFIGURATION = 'L5A'
-    READ_CONFIGURATION = 'L'
+    GET_CONFIGURATION = 'L'
     IMMEDIATE_STATUS = 'I'
     QUIT_SESSION = 'Q'
     TAKE_SAMPLE = 'R'
@@ -95,7 +96,6 @@ class InstrumentCmds(BaseEnum):
     AUTO_STATUS_ON = 'F'
     AUTO_STATUS_OFF = 'F5A'
 
-    
 class ProtocolState(BaseEnum):
     """
     Instrument protocol states
@@ -104,12 +104,6 @@ class ProtocolState(BaseEnum):
     COMMAND = DriverProtocolState.COMMAND
     AUTOSAMPLE = DriverProtocolState.AUTOSAMPLE
     DIRECT_ACCESS = DriverProtocolState.DIRECT_ACCESS
-#    TEST = DriverProtocolState.TEST
-#    CALIBRATE = DriverProtocolState.CALIBRATE
-
-class ExportedInstrumentCommand(BaseEnum):
-    READ_CONFIGURATION = "EXPORTED_INSTRUMENT_CMD_READ_CONFIGURATION"
-    SET_CONFIGURATION = "EXPORTED_INSTRUMENT_CMD_SET_CONFIGURATION"
 
 class ProtocolEvent(BaseEnum):
     """
@@ -123,118 +117,26 @@ class ProtocolEvent(BaseEnum):
     DISCOVER = DriverEvent.DISCOVER
 
     ### Common driver commands, should these be promoted?  What if the command isn't supported?
+    START_DIRECT     = DriverEvent.START_DIRECT
+    STOP_DIRECT      = DriverEvent.STOP_DIRECT
     START_AUTOSAMPLE = DriverEvent.START_AUTOSAMPLE
-    STOP_AUTOSAMPLE = DriverEvent.STOP_AUTOSAMPLE
-    
-    ACQUIRE_SAMPLE = DriverEvent.ACQUIRE_SAMPLE
-    ACQUIRE_STATUS = DriverEvent.ACQUIRE_STATUS
-    EXECUTE_DIRECT = DriverEvent.EXECUTE_DIRECT
-    FORCE_STATE = DriverEvent.FORCE_STATE
-    START_DIRECT = DriverEvent.START_DIRECT
-    STOP_DIRECT = DriverEvent.STOP_DIRECT
-
-    SETSAMPLING = 'PROTOCOL_EVENT_SETSAMPLING'
-    QUIT_SESSION = 'PROTOCOL_EVENT_QUIT_SESSION'
-    INIT_LOGGING = 'PROTOCOL_EVENT_INIT_LOGGING'
-
-    # instrument specific events
-    READ_CONFIGURATION = ExportedInstrumentCommand.READ_CONFIGURATION
-    SET_CONFIGURATION = ExportedInstrumentCommand.SET_CONFIGURATION
-    
-    CLOCK_SYNC = DriverEvent.CLOCK_SYNC
+    STOP_AUTOSAMPLE  = DriverEvent.STOP_AUTOSAMPLE   
+    EXECUTE_DIRECT   = DriverEvent.EXECUTE_DIRECT
 
 class Capability(BaseEnum):
     """
     Protocol events that should be exposed to users (subset of above).
     """
-    ACQUIRE_SAMPLE   = ProtocolEvent.ACQUIRE_SAMPLE
     START_AUTOSAMPLE = ProtocolEvent.START_AUTOSAMPLE
-    STOP_AUTOSAMPLE  = ProtocolEvent.STOP_AUTOSAMPLE
-    CLOCK_SYNC = ProtocolEvent.CLOCK_SYNC
-    ACQUIRE_STATUS  = ProtocolEvent.ACQUIRE_STATUS
-    
-    READ_CONFIGURATION = ProtocolEvent.READ_CONFIGURATION
-    SET_CONFIGURATION = ProtocolEvent.SET_CONFIGURATION
+    STOP_AUTOSAMPLE  = ProtocolEvent.STOP_AUTOSAMPLE    
+#    GET_CONFIGURATION = ProtocolEvent.GET
 
 class Parameter(DriverParameter):
     """
     Device specific parameters.
-    """
+    """   
     # Configuration Parameter Information.
     CFG_PROGRAM_DATE = 'program_date'   # TIMESTAMP = 'TIMESTAMP'
-    CFG_START_TIME_OFFSET = 'start_time_offset'
-    CFG_RECORDING_TIME = 'recording_time'
-    
-    # Mode Bits.
-    CFG_PMI_SAMPLE_SCHEDULE = 'pmi_sample_schedule'
-    CFG_SAMI_SAMPLE_SCHEDULE = 'sami_sample_schedule'
-    CFG_SLOT1_FOLLOWS_SAMI_SCHEDULE = 'slot1_follows_sami_sample'
-    CFG_SLOT1_INDEPENDENT_SCHEDULE  = 'slot1_independent_schedule'
-    CFG_SLOT2_FOLLOWS_SAMI_SCHEDULE = 'slot2_follows_sami_sample'
-    CFG_SLOT2_INDEPENDENT_SCHEDULE  = 'slot2_independent_schedule'
-    CFG_SLOT3_FOLLOWS_SAMI_SCHEDULE = 'slot3_follows_sami_sample'
-    CFG_SLOT3_INDEPENDENT_SCHEDULE  = 'slot3_independent_schedule'
-    
-    # Timer,Device,Pointer Triples
-    CFG_TIMER_INTERVAL_SAMI = 'timer_interval_sami'     # TIMER_INTERVAL
-    CFG_DRIVER_ID_SAMI = 'driver_id_sami'
-    CFG_PARAMETER_POINTER_SAMI = 'parameter_pointer_sami'
-    CFG_TIMER_INTERVAL_1 = 'timer_interval_1'
-    CFG_DRIVER_ID_1 = 'driver_id_1'
-    CFG_PARAMETER_POINTER_1 = 'parameter_pointer_1'
-    CFG_TIMER_INTERVAL_2 = 'timer_interval_2'
-    CFG_DRIVER_ID_2 = 'driver_id_2'
-    CFG_PARAMETER_POINTER_2 = 'parameter_pointer_2'
-    CFG_TIMER_INTERVAL_3 = 'timer_interval_3'
-    CFG_DRIVER_ID_3 = 'driver_id_3'
-    CFG_PARAMETER_POINTER_3 = 'parameter_pointer_3'
-    CFG_TIMER_INTERVAL_PRESTART = 'timer_interval_prestart'
-    CFG_DRIVER_ID_PRESTART = 'driver_id_prestart'
-    CFG_PARAMETER_POINTER_PRESTART = 'parameter_pointer_prestart'
-    
-    # GLobal Configuration Register
-    CFG_USE_BAUD_RATE_57600 = 'use_baud_rate_57600'
-    CFG_SEND_RECORD_TYPE_EARLY = 'send_recordtype_early'
-    CFG_SEND_LIVE_RECORDS = 'send_live_records'
-    CFG_EXTEND_GLOBAL_CONFIG = 'extend_global_config'
-    
-    # CO2-Settings
-    CFG_PUMP_PULSE = 'pump_pulse'
-    CFG_PUMP_ON_TO_MEASURE = 'pump_on_to_measure'
-    CFG_SAMPLES_PER_MEASURE = 'samples_per_measure'
-    CFG_CYCLES_BETWEEN_BLANKS = 'cycles_between_blanks'
-    CFG_NUM_REAGENT_CYCLES = 'num_reagent_cycles'
-    CFG_NUM_BLANK_CYCLES = 'num_blank_cycles'
-    CFG_FLUSH_PUMP_INTERVAL = 'flush_pump_interval'
-    CFG_BLANK_FLUSH_ON_START_DISABLE = 'blank_flush_on_start'
-    CFG_PUMP_PULSE_POST_MEASURE = 'pump_pulse_post_measure'
-    CFG_CYCLE_DATA = 'cycle_data'
-    
-    CFG_SERIAL_SETTINGS = 'serial_settings'
-    
-    # Immediate Status
-    IS_PUMP_ON = 'pump_on'
-    IS_VALVE_ON = 'value_on'
-    IS_EXTERNAL_POWER_ON = 'external_power_on'
-    IS_DEBUG_LED = 'debug_led'
-    IS_DEBUG_ECHO = 'debug_echo'
-    
-    # Regular Device Status
-    DS_ELAPSED_CONFIG_TIME = 'elapsed_config_time'
-    DS_CLOCK_ACTIVE = 'clock_active'
-    DS_RECORDING_ACTIVE = 'recording_active'
-    DS_RECORD_END_ON_TIME = 'record_end_on_time'
-    DS_RECORD_MEMORY_FULL = 'record_memory_full'
-    DS_RECORD_END_ON_ERROR = 'record_end_on_error'
-    DS_DATA_DOWNLOAD_OK = 'data_download_ok'
-    DS_FLASH_MEMORY_OPEN = 'flash_memory_open'
-    DS_BATTERY_ERROR_FATAL = 'battery_error_fatal'
-    DS_BATTERY_LOW_MEASUREMENT = 'battery_low_measurement'
-    DS_BATTERY_LOW_BLANK = 'battery_low_blank'
-    DS_BATTERY_LOW_EXTERNAL = 'battery_low_external'
-    DS_EXTERNAL_DEVICE_FAULT = 'external_device_fault'
-    DS_FLASH_ERASED = 'flash_erased'
-    DS_POWER_ON_INVALID = 'power_on_invalid'
     
 # Device prompts.
 class Prompt(BaseEnum):
@@ -243,7 +145,7 @@ class Prompt(BaseEnum):
     """
     IMMEDIATE_STATUS_COMMAND = 'I'
     BAD_COMMAND = '?'
-    CONFIG_COMMAND = 'L'
+    GET_CONFIGURATION_COMMAND = 'L'
     DEVICE_STATUS_COMMAND = 'S'
     CONFIRMATION_PROMPT = 'proceed Y/N ?'
     
@@ -898,11 +800,11 @@ class InstrumentDriver(SingleConnectionInstrumentDriver):
     # Superclass overrides for resource query.
     ########################################################################
 
-    def get_resource_params(self):
-        """
-        Return list of device parameters available.
-        """
-        return Parameter.list()
+#    def get_resource_params(self):
+#        """
+#        Return list of device parameters available.
+#        """
+#        return Parameter.list()
 
     ########################################################################
     # Protocol builder.
@@ -940,18 +842,15 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         # Add event handlers for protocol state machine.
         self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.ENTER, self._handler_unknown_enter)
-        self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.EXIT, self._handler_unknown_exit)
         self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.DISCOVER, self._handler_unknown_discover)
 
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.ENTER, self._handler_command_enter)
-        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.EXIT, self._handler_command_exit)
-        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.ACQUIRE_SAMPLE, self._handler_command_acquire_sample)
-        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.START_DIRECT, self._handler_command_start_direct)
-        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.GET, self._handler_command_autosample_test_get)
+        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.GET, self._handler_command_get)
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.SET, self._handler_command_set)
+        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.START_DIRECT, self._handler_command_start_direct)
+        self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.START_AUTOSAMPLE, self._handler_command_start_autosample)
 
         self._protocol_fsm.add_handler(ProtocolState.AUTOSAMPLE, ProtocolEvent.ENTER, self._handler_autosample_enter)
-        self._protocol_fsm.add_handler(ProtocolState.AUTOSAMPLE, ProtocolEvent.EXIT,  self._handler_autosample_exit)
         self._protocol_fsm.add_handler(ProtocolState.AUTOSAMPLE, ProtocolEvent.STOP_AUTOSAMPLE, self._handler_autosample_stop_autosample)
 
         self._protocol_fsm.add_handler(ProtocolState.DIRECT_ACCESS, ProtocolEvent.ENTER, self._handler_direct_access_enter)
@@ -967,15 +866,16 @@ class Protocol(CommandResponseInstrumentProtocol):
         self._add_build_handler(InstrumentCmds.AUTO_STATUS_OFF,     self._build_simple_command)
         self._add_build_handler(InstrumentCmds.DEVICE_STATUS,       self._build_simple_command)
         self._add_build_handler(InstrumentCmds.IMMEDIATE_STATUS,    self._build_simple_command)
-        self._add_build_handler(InstrumentCmds.READ_CONFIGURATION,  self._build_simple_command)
         self._add_build_handler(InstrumentCmds.TAKE_SAMPLE,         self._build_simple_command)
-        self._add_build_handler(InstrumentCmds.SET_CONFIGURATION,   self._build_set_configuration_command)
+        self._add_build_handler(InstrumentCmds.GET_CONFIGURATION,   self._build_simple_command)
+        self._add_build_handler(InstrumentCmds.SET_CONFIGURATION,   self._build_config_command)
         
         # Add response handlers for device commands.
         self._add_response_handler(InstrumentCmds.DEVICE_STATUS,     self._parse_S_response)
         self._add_response_handler(InstrumentCmds.IMMEDIATE_STATUS,  self._parse_I_response)
-        self._add_response_handler(InstrumentCmds.READ_CONFIGURATION,self._parse_cfg_response)
         self._add_response_handler(InstrumentCmds.TAKE_SAMPLE,       self._parse_R_response)
+        self._add_response_handler(InstrumentCmds.GET_CONFIGURATION, self._parse_config_response)
+        self._add_response_handler(InstrumentCmds.SET_CONFIGURATION, self._parse_config_response)
 
         # Add sample handlers.
         # State state machine in UNKNOWN state.
@@ -1018,6 +918,19 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         return cmd + NEWLINE
 
+    def _build_config_command(self, cmd, *args, **kwargs):
+        user_configuration = kwargs.get('user_configuration', None)
+        log.debug("Testing _build_config_command")
+
+        if not user_configuration:
+            raise InstrumentParameterException('_build_config_command command missing user_configuration parameter.')
+        if not isinstance(user_configuration, str):
+            raise InstrumentParameterException('_build_config_command command requires a string user_configuration parameter.')
+        self._dump_config(user_configuration)        
+            
+        cmd_line = cmd + user_configuration
+        return cmd_line
+    
     def _build_param_dict(self):
         """
         Populate the parameter dictionary with parameters.
@@ -1030,384 +943,11 @@ class Protocol(CommandResponseInstrumentProtocol):
         #
         # Next 2 work together to pull 2 values out of a single line.
         #      
-        # These parameters are pulled out of the "L" Command.
+        # These parameters are pulled out of the "L" Command.       
         self._param_dict.add(Parameter.CFG_PROGRAM_DATE, 
             cfg_line_01,
-            lambda match : match.group(1), 
-            self._int32_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_START_TIME_OFFSET, 
-            cfg_line_01,
-            lambda match : match.group(2), 
-            self._int24_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_RECORDING_TIME, 
-            cfg_line_01,
-            lambda match : match.group(3), 
-            self._int24_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        # Configuration Mode Bits.        
-        self._param_dict.add(Parameter.CFG_PMI_SAMPLE_SCHEDULE, 
-            CONFIG_REGEX,
-            lambda match : match.group(4), 
-            self._bit0_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_SAMI_SAMPLE_SCHEDULE, 
-            CONFIG_REGEX,
-            lambda match : match.group(4), 
-            self._bit1_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_SLOT1_FOLLOWS_SAMI_SCHEDULE, 
-            CONFIG_REGEX,
-            lambda match : match.group(4), 
-            self._bit2_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_SLOT1_INDEPENDENT_SCHEDULE, 
-            CONFIG_REGEX,
-            lambda match : match.group(4), 
-            self._bit3_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_SLOT2_FOLLOWS_SAMI_SCHEDULE, 
-            CONFIG_REGEX,
-            lambda match : match.group(4), 
-            self._bit4_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_SLOT2_INDEPENDENT_SCHEDULE, 
-            CONFIG_REGEX,
-            lambda match : match.group(4), 
-            self._bit5_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_SLOT3_FOLLOWS_SAMI_SCHEDULE, 
-            CONFIG_REGEX,
-            lambda match : match.group(4), 
-            self._bit6_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_SLOT3_INDEPENDENT_SCHEDULE, 
-            CONFIG_REGEX,
-            lambda match : match.group(4), 
-            self._bit7_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        # Groups #1 of device settings (Usually the SAMI Device Information)  
-        self._param_dict.add(Parameter.CFG_TIMER_INTERVAL_SAMI,
-            CONFIG_REGEX,
-            lambda match : match.group(5), 
-            self._int24_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_DRIVER_ID_SAMI,
-            CONFIG_REGEX,
-            lambda match : match.group(6), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_PARAMETER_POINTER_SAMI,
-            CONFIG_REGEX,
-            lambda match : match.group(7), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        # Groups #2 of device settings.        
-        self._param_dict.add(Parameter.CFG_TIMER_INTERVAL_1,
-            CONFIG_REGEX,
-            lambda match : match.group(8), 
-            self._int24_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_DRIVER_ID_1,
-            CONFIG_REGEX,
-            lambda match : match.group(9), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_PARAMETER_POINTER_1,
-            CONFIG_REGEX,
-            lambda match : match.group(10), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        # Groups #3 of device settings.        
-        self._param_dict.add(Parameter.CFG_TIMER_INTERVAL_2,
-            CONFIG_REGEX,
-            lambda match : match.group(11), 
-            self._int24_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_DRIVER_ID_2,
-            CONFIG_REGEX,
-            lambda match : match.group(12), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_PARAMETER_POINTER_2,
-            CONFIG_REGEX,
-            lambda match : match.group(13), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        # Groups #4 of device settings.        
-        self._param_dict.add(Parameter.CFG_TIMER_INTERVAL_3,
-            CONFIG_REGEX,
-            lambda match : match.group(14), 
-            self._int24_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_DRIVER_ID_3,
-            CONFIG_REGEX,
-            lambda match : match.group(15), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_PARAMETER_POINTER_3,
-            CONFIG_REGEX,
-            lambda match : match.group(16), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        # Groups #5 of device settings (Prestart Information)     
-        self._param_dict.add(Parameter.CFG_TIMER_INTERVAL_PRESTART,
-            CONFIG_REGEX,
-            lambda match : match.group(17), 
-            self._int24_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_DRIVER_ID_PRESTART,
-            CONFIG_REGEX,
-            lambda match : match.group(18), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_PARAMETER_POINTER_PRESTART,
-            CONFIG_REGEX,
-            lambda match : match.group(19), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        # Global Switch Settings
-        self._param_dict.add(Parameter.CFG_USE_BAUD_RATE_57600,
-            CONFIG_REGEX,
-            lambda match : match.group(20), 
-            self._bit0_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_SEND_RECORD_TYPE_EARLY,
-            CONFIG_REGEX,
-            lambda match : match.group(20), 
-            self._bit1_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_SEND_LIVE_RECORDS,
-            CONFIG_REGEX,
-            lambda match : match.group(20), 
-            self._bit2_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.CFG_EXTEND_GLOBAL_CONFIG,
-            CONFIG_REGEX,
-            lambda match : match.group(20), 
-            self._bit7_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        # PC02 Pump Driver.
-        self._param_dict.add(Parameter.CFG_PUMP_PULSE,
-            CONFIG_REGEX,
-            lambda match : match.group(21), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_PUMP_ON_TO_MEASURE,
-            CONFIG_REGEX,
-            lambda match : match.group(22), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_SAMPLES_PER_MEASURE,
-            CONFIG_REGEX,
-            lambda match : match.group(23), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_CYCLES_BETWEEN_BLANKS,
-            CONFIG_REGEX,
-            lambda match : match.group(24), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_NUM_REAGENT_CYCLES,
-            CONFIG_REGEX,
-            lambda match : match.group(25), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_NUM_BLANK_CYCLES,
-            CONFIG_REGEX,
-            lambda match : match.group(26), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_FLUSH_PUMP_INTERVAL,
-            CONFIG_REGEX,
-            lambda match : match.group(27), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_BLANK_FLUSH_ON_START_DISABLE,
-            CONFIG_REGEX,
-            lambda match : match.group(28), 
-            self._bit0_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.CFG_PUMP_PULSE_POST_MEASURE,
-            CONFIG_REGEX,
-            lambda match : match.group(28), 
-            self._bit1_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        # CFG_CYCLE_DATA = (32 * ExtraPumpCycles) + CycleInterval.
-        # CycleInterval = CFG_CYCLE_DATA - int(CFG_CYCLE_DATA / 32)
-        self._param_dict.add(Parameter.CFG_CYCLE_DATA,
-            CONFIG_REGEX,
-            lambda match : match.group(29), 
-            self._int8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-       
-        # These strings contain fields that can be parsed.
-        self._param_dict.add(Parameter.CFG_SERIAL_SETTINGS,
-            CONFIG_REGEX,
-            lambda match : match.group(30), 
-            self._string_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        # This information is extracted from the status word.
-        self._param_dict.add(Parameter.IS_PUMP_ON,
-            IMMEDIATE_STATUS_REGEX,
-            lambda match : match.group(1),
-            self._bit0_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.IS_VALVE_ON,
-            IMMEDIATE_STATUS_REGEX,
-            lambda match : match.group(1),
-            self._bit1_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-
-        self._param_dict.add(Parameter.IS_EXTERNAL_POWER_ON,
-            IMMEDIATE_STATUS_REGEX,
-            lambda match : match.group(1),
-            self._bit2_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.IS_DEBUG_LED,
-            IMMEDIATE_STATUS_REGEX,
-            lambda match : match.group(1),
-            self._bit4_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-        
-        self._param_dict.add(Parameter.IS_DEBUG_ECHO,
-            IMMEDIATE_STATUS_REGEX,
-            lambda match : match.group(1),
-            self._bit5_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-               
-        # These parameters are from the "S0" Command
-        self._param_dict.add(Parameter.DS_ELAPSED_CONFIG_TIME,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(1), 
-            self._int24_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_CLOCK_ACTIVE,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit0_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_RECORDING_ACTIVE,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit1_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_RECORD_END_ON_TIME,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit2_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_RECORD_MEMORY_FULL,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit3_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_RECORD_END_ON_ERROR,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit4_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_DATA_DOWNLOAD_OK,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit5_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_FLASH_MEMORY_OPEN,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit6_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_BATTERY_ERROR_FATAL,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit7_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_BATTERY_LOW_MEASUREMENT,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_BATTERY_LOW_BLANK,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit8_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_BATTERY_LOW_EXTERNAL,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit10_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_EXTERNAL_DEVICE_FAULT,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit11_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_FLASH_ERASED,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit14_to_string,
-            visibility=ParameterDictVisibility.READ_ONLY)
-                             
-        self._param_dict.add(Parameter.DS_POWER_ON_INVALID,
-            DEVICE_STATUS_REGEX,
-            lambda match : match.group(2), 
-            self._bit15_to_string,
+            lambda match : match.group(1),                  # Input
+            self._int32_to_string,                          # Output, note needs to be 7
             visibility=ParameterDictVisibility.READ_ONLY)
         
     def _got_chunk(self, chunk):
@@ -1431,6 +971,25 @@ class Protocol(CommandResponseInstrumentProtocol):
         events_out = [x for x in events if Capability.has(x)]
         return events_out
 
+    def get_config(self, *args, **kwargs):
+        """ Get the entire configuration for the instrument
+        
+        @param params The parameters and values to set
+        @retval None if nothing was done, otherwise result of FSM event handle
+        Should be a dict of parameters and values
+        @throws InstrumentProtocolException On invalid parameter
+        """
+        config = self._protocol_fsm.on_event(ProtocolEvent.GET, [Parameter.CFG_PROGRAM_DATE], **kwargs)
+        assert (isinstance(config, dict))
+        assert (config.has_key(Parameter.CFG_PROGRAM_DATE))
+        
+        # Make sure we get these
+        # TODO: endless loops seem like really bad idea
+        while config[Parameter.CFG_PROGRAM_DATE] == InstErrorCode.HARDWARE_ERROR:
+            config[Parameter.CFG_PROGRAM_DATE] = self._protocol_fsm.on_event(ProtocolEvent.GET, [Parameter.CFG_PROGRAM_DATE])
+  
+        return config
+    
     ########################################################################
     # Unknown handlers.
     ########################################################################
@@ -1442,7 +1001,15 @@ class Protocol(CommandResponseInstrumentProtocol):
         # Tell driver superclass to send a state change event.
         # Superclass will query the state.
         log.debug("Testing _handler_unknown_enter")
+       
+        next_state = None
+        result = None
+                                
+        # Tell driver superclass to send a state change event.
+        # Superclass will query the state.
         self._driver_event(DriverAsyncEvent.STATE_CHANGE)
+        return(result, next_state)
+
 
     def _handler_unknown_discover(self, *args, **kwargs):
         """
@@ -1454,40 +1021,13 @@ class Protocol(CommandResponseInstrumentProtocol):
         an expected state.
         """
         log.debug("Testing _handler_unknown_discover")
-        return (ProtocolState.COMMAND, ResourceAgentState.IDLE)
-
-    def _handler_unknown_force_state(self, *args, **kwargs):
-        """
-        Force driver into a given state for the purposes of unit testing
-        @param state=desired_state Required desired state to transition to.
-        @raises InstrumentParameterException if no st'ate parameter.
-        """
-        log.debug("************* " + repr(kwargs))
-        log.debug("************* in _handler_unknown_force_state()" + str(kwargs.get('state', None)))
-
-        state = kwargs.get('state', None)  # via kwargs
-        if state is None:
-            raise InstrumentParameterException('Missing state parameter.')
-
-        next_state = state
-        result = state
-
-        return (next_state, result)
-
-    def _handler_unknown_exit(self, *args, **kwargs):
-        """
-        Exit unknown state.
-        """
-        log.debug("Testing _handler_unknown_exit")
-        pass
-
-    def _handler_unknown_discover(self, *args, **kwargs):
-        """
-        Discover current state
-        @retval (next_state, result)
-        """
-        log.debug("Testing _handler_unknown_discover")
-        return (ProtocolState.COMMAND, ResourceAgentState.IDLE)
+        next_state = None
+        next_agent_state = None
+                   
+        next_state = ProtocolState.COMMAND
+        next_agent_state = ResourceAgentState.IDLE
+                
+        return ( next_state, next_agent_state )
 
     ########################################################################
     # Autosample handlers.
@@ -1496,11 +1036,13 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         Enter autosample state.
         """
+		# We are now in AutoSample state when we get here.
         # Tell driver superclass to send a state change event.
         # Superclass will query the state.
-
-        self._driver_event(DriverAsyncEvent.STATE_CHANGE)
-
+        next_state = None
+        next_agent_state = None
+        return( next_state, next_agent_state)
+		
     def _handler_autosample_stop_autosample(self, *args, **kwargs):
         """
         Stop autosample and switch back to command mode.
@@ -1522,12 +1064,6 @@ class Protocol(CommandResponseInstrumentProtocol):
         next_agent_state = ResourceAgentState.COMMAND
 
         return (next_state, (next_agent_state, result))
-
-    def _handler_autosample_exit(self, *args, **kwargs):
-        """
-        Exit autosample state.
-        """
-        pass
 
     ########################################################################
     # Command handlers.
@@ -1557,19 +1093,46 @@ class Protocol(CommandResponseInstrumentProtocol):
         @throws SampleException if a sample could not be extracted from result.
         """
 
+        log.debug("Testing _handler_command_acquire_sample")
         next_state = None
         next_agent_state = None
         result = None
 
         kwargs['timeout'] = 30 # samples can take a long time
 
-        log.debug("Testing _handler_command_acquire_sample")
-
+		# Acquire one sample and return the result.
         result = self._do_cmd_resp(InstrumentCmds.TAKE_SAMPLE, *args, **kwargs)
 
         return (next_state, (next_agent_state, result))
 
-    def _handler_command_set_configuration(self, *args, **kwargs):
+    def _handler_command_get(self, params=None, *args, **kwargs):
+        """
+        """
+        next_state = None
+        result = None
+
+        log.debug("Testing _handler_command_get")
+
+        # All parameters that can be set by the instrument.  Explicitly
+        # excludes parameters from the instrument header.
+        if (params == DriverParameter.ALL):
+            params = [Parameter.CFG_PROGRAM_DATE]
+            
+        if ((params == None) or (not isinstance(params, list))):
+            raise InstrumentParameterException()
+        
+        result_vals = {}
+        for param in params:
+            if not Parameter.has(param):
+                raise InstrumentParameterException()
+            result_vals[param] = self._param_dict.get(param) 
+
+        result = result_vals
+
+        log.debug("Get finished, next: %s, result: %s", next_state, result) 
+        return (next_state, result)
+    
+    def _handler_command_set(self, params, *args, **kwargs):
         """
         """
         next_state = None
@@ -1579,43 +1142,12 @@ class Protocol(CommandResponseInstrumentProtocol):
         log.debug("Testing _handler_command_set_configuration")
         
         kwargs['timeout'] = 30 # samples can take a long time
-
+		# Run trick for Configuration Update in instrument.
         result = self._do_cmd_resp(InstrumentCmds.SET_CONFIGURATION, *args, **kwargs)
+		# In 30 seconds should receive message>
+		# Build configuration string and send - this can be done in the build handler.???
 
         return (next_state, (next_agent_state, result))
-
-    def _build_set_configuration_command(self, cmd, *args, **kwargs):
-        user_configuration = kwargs.get('user_configuration', None)
-        log.debug("Testing _build_set_configuration_command")
-        if not user_configuration:
-            raise InstrumentParameterException('set_configuration command missing user_configuration parameter.')
-        if not isinstance(user_configuration, str):
-            raise InstrumentParameterException('set_configuration command requires a string user_configuration parameter.')
-        self._dump_config(user_configuration)        
-            
-        cmd_line = cmd + user_configuration
-        return cmd_line
-
-    ################################
-    # SET / SETSAMPLING
-    ################################
-
-    def _handler_command_set(self, *args, **kwargs):
-        """
-        Set parameter
-        """
-        next_state = None
-        result = None
-        log.debug("Testing _handler_command_Set")
-
-        return (next_state, result)
-
-    def _handler_command_exit(self, *args, **kwargs):
-        """
-        Exit command state.
-        """
-        log.debug("Testing _handler_command_exit")
-        pass
 
     def _handler_command_start_direct(self):
         """
@@ -1627,6 +1159,21 @@ class Protocol(CommandResponseInstrumentProtocol):
         log.debug("_handler_command_start_direct: entering DA mode")
         return (next_state, (next_agent_state, result))
 		
+    def _handler_command_start_autosample(self):
+        """
+        Start autosample
+        """
+        log.debug("_handler_command_start_autosample:")
+        next_state = None
+        next_agent_state = None
+        result = None
+
+        # self._do_cmd_no_response(Command.GoGo)
+        next_state = ProtocolState.AUTOSAMPLE
+        next_agent_state = ResourceAgentState.STREAMING
+        
+        return (next_state, (next_agent_state, result))
+        
     ########################################################################
     # Autosample handlers.
     ########################################################################
@@ -1727,7 +1274,7 @@ class Protocol(CommandResponseInstrumentProtocol):
     # Private helpers.
     ########################################################################
 
-    def _parse_cfg_response(self, response, prompt):
+    def _parse_config_response(self, response, prompt):
         """
         Response handler for configuration "L" command
         """
@@ -1809,6 +1356,13 @@ class Protocol(CommandResponseInstrumentProtocol):
         return result
     
     ########################################################################
+    # Static Helpers.
+    ########################################################################
+    def _wakeup(self, timeout):
+        """There is no wakeup sequence for this instrument"""
+        pass
+    
+    ########################################################################
     # Static helpers to format set commands.
     ########################################################################
     @staticmethod
@@ -1820,9 +1374,6 @@ class Protocol(CommandResponseInstrumentProtocol):
         r = int(v,16)
         return r
     
-   ########################################################################
-    # Static Helpers.
-    ########################################################################
     @staticmethod
     def _string_to_string(v):
         return v
@@ -1864,6 +1415,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         if not isinstance(value,int):
             raise InstrumentParameterException('Value %s is not an int-32' % str(value))
         else:
+            log.debug("Inside _int32_to_string() " + int(value))
             msg = _digit_to_ascii( (value & 0xF0000000) >> 28 )
             msg = msg + _digit_to_ascii( (value & 0x0F000000) >> 24 )
             msg = msg + _digit_to_ascii( (value & 0x00F00000) >> 20 )

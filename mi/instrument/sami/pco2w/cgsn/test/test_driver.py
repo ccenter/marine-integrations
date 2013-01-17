@@ -17,6 +17,7 @@ __author__ = 'Chris Center'
 __license__ = 'Apache 2.0'
 
 import unittest
+import json
 
 from nose.plugins.attrib import attr
 from mock import Mock
@@ -41,10 +42,12 @@ from mi.idk.unit_test import DriverTestMixin
 from interface.objects import AgentCommand
 
 from mi.core.instrument.logger_client import LoggerClient
+from mi.core.instrument.port_agent_client import PortAgentPacket
 
 from mi.core.instrument.instrument_driver import DriverAsyncEvent
 from mi.core.instrument.instrument_driver import DriverConnectionState
 from mi.core.instrument.instrument_driver import DriverProtocolState
+from mi.core.instrument.instrument_driver import DriverParameter
 
 from ion.agents.instrument.instrument_agent import InstrumentAgentState
 from ion.agents.instrument.direct_access.direct_access_server import DirectAccessTypes
@@ -79,6 +82,7 @@ SAMPLE_IMMEDIATE_STATUS_DATA = "10" + NEWLINE
 SAMPLE_ERR_DATA = "?03" + NEWLINE
 SAMPLE_RECORD_DATA = "*5B2704C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B" + NEWLINE
 SAMPLE_DEVICE_STATUS_DATA = ":000029ED40" + NEWLINE
+#                            :0033A5800000000000000000000000F7
 SAMPLE_DEVICE_STATUS_DATA_BAD = "000029ED40" + NEWLINE
 # SAMPLE_CONFIG_DATA = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C1020FFA8181C010038100101202564000433383335000200010200020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" + NEWLINE
 SAMPLE_CONFIG_DATA_1 = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C071020FFA8181C010038100101202564000433383335000200010200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" + NEWLINE
@@ -144,81 +148,7 @@ class DataParticleMixin(DriverTestMixin):
     ##
     _driver_parameters = {
         # DS # parameters - contains all setsampling parameters
-        Parameter.CFG_PROGRAM_DATE : int,
-        Parameter.CFG_START_TIME_OFFSET : int,
-        Parameter.CFG_RECORDING_TIME : int,
-        
-        # Mode Bits
-        Parameter.CFG_PMI_SAMPLE_SCHEDULE : bool,
-        Parameter.CFG_SAMI_SAMPLE_SCHEDULE : bool,
-        Parameter.CFG_SLOT1_FOLLOWS_SAMI_SCHEDULE : bool,
-        Parameter.CFG_SLOT1_INDEPENDENT_SCHEDULE  : bool,
-        Parameter.CFG_SLOT2_FOLLOWS_SAMI_SCHEDULE : bool,
-        Parameter.CFG_SLOT2_INDEPENDENT_SCHEDULE  : bool,
-        Parameter.CFG_SLOT3_FOLLOWS_SAMI_SCHEDULE : bool,
-        Parameter.CFG_SLOT3_INDEPENDENT_SCHEDULE  : bool,
-        
-        # Timer,Device,Pointer Triples
-        Parameter.CFG_TIMER_INTERVAL_SAMI : int,
-        Parameter.CFG_DRIVER_ID_SAMI : int,
-        Parameter.CFG_PARAMETER_POINTER_SAMI : int,
-        Parameter.CFG_TIMER_INTERVAL_1 : int,
-        Parameter.CFG_DRIVER_ID_1 : int,
-        Parameter.CFG_PARAMETER_POINTER_1 : int,
-        Parameter.CFG_TIMER_INTERVAL_2 : int,
-        Parameter.CFG_DRIVER_ID_2 : int,
-        Parameter.CFG_PARAMETER_POINTER_2 : int,
-        Parameter.CFG_TIMER_INTERVAL_3 : int,
-        Parameter.CFG_DRIVER_ID_3 : int,
-        Parameter.CFG_PARAMETER_POINTER_3 : int,
-        Parameter.CFG_TIMER_INTERVAL_PRESTART : int,
-        Parameter.CFG_DRIVER_ID_PRESTART : int,
-        Parameter.CFG_PARAMETER_POINTER_PRESTART : int,
-        
-        # GLobal Configuration Register
-        Parameter.CFG_USE_BAUD_RATE_57600 : bool,
-        Parameter.CFG_SEND_RECORD_TYPE_EARLY : bool,
-        Parameter.CFG_SEND_LIVE_RECORDS : bool,
-        Parameter.CFG_EXTEND_GLOBAL_CONFIG : bool,
-        
-        # CO2-Settings
-        Parameter.CFG_PUMP_PULSE : int,
-        Parameter.CFG_PUMP_ON_TO_MEASURE : int,
-        Parameter.CFG_SAMPLES_PER_MEASURE : int,
-        Parameter.CFG_CYCLES_BETWEEN_BLANKS : int,
-        Parameter.CFG_NUM_REAGENT_CYCLES : int,
-        Parameter.CFG_NUM_BLANK_CYCLES : int,
-        Parameter.CFG_FLUSH_PUMP_INTERVAL : int,
-        Parameter.CFG_BLANK_FLUSH_ON_START_DISABLE : bool,
-        Parameter.CFG_PUMP_PULSE_POST_MEASURE : bool,
-        Parameter.CFG_CYCLE_DATA : int,
-        
-        Parameter.CFG_SERIAL_SETTINGS : unicode,
-		
-        # Immediate Status Information.
-        Parameter.IS_PUMP_ON : bool,
-        Parameter.IS_VALVE_ON : bool,
-        Parameter.IS_EXTERNAL_POWER_ON : bool,
-        Parameter.IS_DEBUG_LED : bool,
-        Parameter.IS_DEBUG_ECHO : bool,
-
-        # Regular Device Status
-        Parameter.DS_ELAPSED_CONFIG_TIME : int,
-        Parameter.DS_CLOCK_ACTIVE : bool,
-        Parameter.DS_RECORDING_ACTIVE : bool,
-        Parameter.DS_RECORD_END_ON_TIME : bool,
-        Parameter.DS_RECORD_MEMORY_FULL : bool,
-        Parameter.DS_RECORD_END_ON_ERROR : bool,
-        Parameter.DS_DATA_DOWNLOAD_OK : bool,
-        Parameter.DS_FLASH_MEMORY_OPEN : bool,
-        Parameter.DS_BATTERY_ERROR_FATAL : bool,
-        Parameter.DS_BATTERY_LOW_MEASUREMENT : bool,
-        Parameter.DS_BATTERY_LOW_BLANK : bool,
-        Parameter.DS_BATTERY_LOW_EXTERNAL : bool,
-        Parameter.DS_EXTERNAL_DEVICE_FAULT : bool,
-        Parameter.DS_FLASH_ERASED : bool,
-        Parameter.DS_POWER_ON_INVALID : bool,
-   
+        Parameter.CFG_PROGRAM_DATE : int  
     }
 
     # Test results that get decoded from the string sent to the chunker.   
@@ -394,19 +324,45 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
     def setUp(self):
         InstrumentDriverUnitTestCase.setUp(self)
 
+    ###
+    #    This is the callback that would normally publish events 
+    #    (streams, state transitions, etc.).
+    #    Use this method to test for existence of events and to examine their
+    #    attributes for correctness.
+    ###
+    
+    def reset_test_vars(self):    
+        self.raw_stream_received = False
+        self.parsed_stream_received = False
+
+    def mock_event_callback(self, event):
+        event_type = event['type']
+        print str(event)
+        
+        if event_type == DriverAsyncEvent.SAMPLE:
+            sample_value = event['value']
+            particle_dict = json.loads(sample_value)
+            stream_type = particle_dict['stream_name']        
+            if stream_type == 'raw':
+                log.debug("raw_stream received")
+                self.raw_stream_received = True
+            elif stream_type == 'parsed':
+                log.debug("rstream type == parsed")
+                self.parsed_stream_received = True
+
     def test_driver_enums(self):
         """
         Verify that all driver enumeration has no duplicate values that might cause confusion.  Also
         do a little extra validation for the Capabilites
         """
-        self.assert_enum_has_no_duplicates(DataParticleType())
-        self.assert_enum_has_no_duplicates(InstrumentCmds())
-        self.assert_enum_has_no_duplicates(ProtocolState())
-        self.assert_enum_has_no_duplicates(ProtocolEvent())
-        self.assert_enum_has_no_duplicates(Parameter())
+#        self.assert_enum_has_no_duplicates(DataParticleType())
+#        self.assert_enum_has_no_duplicates(InstrumentCmds())
+#        self.assert_enum_has_no_duplicates(ProtocolState())
+#        self.assert_enum_has_no_duplicates(ProtocolEvent())
+#        self.assert_enum_has_no_duplicates(Parameter())
 
         # Test capabilites for duplicates, them verify that capabilities is a subset of proto events
-        self.assert_enum_has_no_duplicates(Capability())
+#        self.assert_enum_has_no_duplicates(Capability())
         self.assert_enum_complete(Capability(), ProtocolEvent())
 
 
@@ -485,6 +441,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
 
         self.assertEqual(reported_parameters, expected_parameters)
 
+
     def test_capabilities(self):
         """
         Verify the FSM reports capabilities as expected.  All states defined in this dict must
@@ -492,23 +449,108 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         """
         capabilities = {
             ProtocolState.UNKNOWN: ['DRIVER_EVENT_DISCOVER'],
-            ProtocolState.COMMAND: ['DRIVER_EVENT_ACQUIRE_SAMPLE',
-#                                    'DRIVER_EVENT_ACQUIRE_STATUS',
-#                                    'DRIVER_EVENT_CLOCK_SYNC',
-#                                    'DRIVER_EVENT_START_AUTOSAMPLE',
-                                    'DRIVER_EVENT_START_DIRECT',
-                                    'DRIVER_EVENT_GET',
-                                    'DRIVER_EVENT_SET'],
-#                                    'PROTOCOL_EVENT_INIT_LOGGING',
-#                                    'PROTOCOL_EVENT_QUIT_SESSION',
-#                                    'PROTOCOL_EVENT_SETSAMPLING'],
+            ProtocolState.COMMAND: ['DRIVER_EVENT_START_DIRECT','DRIVER_EVENT_GET','DRIVER_EVENT_SET','DRIVER_EVENT_START_AUTOSAMPLE'],
             ProtocolState.AUTOSAMPLE: ['DRIVER_EVENT_STOP_AUTOSAMPLE'],
             ProtocolState.DIRECT_ACCESS: ['DRIVER_EVENT_STOP_DIRECT', 'EXECUTE_DIRECT']
-       }
-#
+        }
+
         driver = InstrumentDriver(self._got_data_event_callback)
         self.assert_capabilities(driver, capabilities)
 
+    def _mock_me(self):
+        """
+        Create a mock port agent
+        """
+        mock_port_agent = Mock( spec=LoggerClient)
+        
+        """
+        Instantiate the driver class directly (no driver client, no driver
+        client, no zmq driver process, no driver process; just own the driver)
+        """       
+        temp_driver = InstrumentDriver(self.mock_event_callback)       
+        current_state = temp_driver.get_resource_state()
+        self.assertEqual(current_state, DriverConnectionState.UNCONFIGURED)
+        log.debug("got here 1")
+        
+        """
+        Now configure the driver with the mock_port_agent, verifying
+        that the driver transitions to the DISCONNECTED state
+        """
+        config = {'mock_port_agent' : mock_port_agent}
+        temp_driver.configure(config = config)
+        current_state = temp_driver.get_resource_state()
+        self.assertEqual(current_state, DriverConnectionState.DISCONNECTED)
+        log.debug("got here 2")
+        
+        """
+        Invoke the connect method of the driver: should connect to mock
+        port agent.  Verify that the connection FSM transitions to CONNECTED,
+        (which means that the FSM should now be reporting the ProtocolState).
+        """
+        temp_driver.connect()
+        current_state = temp_driver.get_resource_state()
+        self.assertEqual(current_state, DriverProtocolState.UNKNOWN)
+        log.debug("got here 3")
+        return( temp_driver )
+    
+    def test_get_current_capabilities(self):
+        temp_driver = self._mock_me()
+        
+        result = temp_driver._protocol.get_resource_capabilities()
+        self.assertEqual(result[0], [])
+        self.assertEqual(result[1], [Parameter.CFG_PROGRAM_DATE])
+        
+        """
+        Force the driver into AUTOSAMPLE state so that it will parse and 
+        publish samples
+        """        
+        temp_driver.set_test_mode(True)
+        temp_driver.test_force_state(state = DriverProtocolState.AUTOSAMPLE)
+        current_state = temp_driver.get_resource_state()
+        self.assertEqual(current_state, DriverProtocolState.AUTOSAMPLE)
+        result = temp_driver._protocol.get_resource_capabilities()
+        self.assertEqual(result[0], [Capability.STOP_AUTOSAMPLE])
+        self.assertEqual(result[1], [Parameter.CFG_PROGRAM_DATE])
+        
+        # Next test working.
+        temp_driver.test_force_state(state = DriverProtocolState.COMMAND)
+        current_state = temp_driver.get_resource_state()
+        self.assertEqual(current_state, DriverProtocolState.COMMAND)  # Was AUTOSAMPLE
+        log.debug("got here 4")
+        
+        self.reset_test_vars()
+        
+        # Ship (mock) this data to the instrument.
+        packet = PortAgentPacket()
+#        header = "\xa3\x9d\x7a\x02\x00\x1c\x0b\x2e\x00\x00\x00\x01\x80\x00\x00\x00" 
+#        packet.unpack_header(header) 
+        packet.attach_data(SAMPLE_DEVICE_STATUS_DATA) 
+        log.debug("got here 5")
+
+        temp_driver._protocol.got_data(packet)
+        
+        self.assertFalse(self.raw_stream_received)
+        self.assertFalse(self.parsed_stream_received)
+
+    def test_complete_sample(self):
+        temp_driver = self._mock_me()
+        
+        """
+        Force the driver into AUTOSAMPLE state so that it will parse and 
+        publish samples
+        """        
+        temp_driver.set_test_mode(True)
+        temp_driver.test_force_state(state = DriverProtocolState.AUTOSAMPLE)
+        current_state = temp_driver.get_resource_state()
+        self.assertEqual(current_state, DriverProtocolState.AUTOSAMPLE)
+        
+        self.reset_test_vars()
+        packet = PortAgentPacket()
+        packet.attach_data(SAMPLE_RECORD_DATA) 
+        temp_driver._protocol.got_data(packet)        
+        self.assertFalse(self.raw_stream_received)
+        self.assertFalse(self.parsed_stream_received)
+        
 ###############################################################################
 #                            INTEGRATION TESTS                                #
 #     Integration test test the direct driver / instrument interaction        #
@@ -550,7 +592,6 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase):
                     self.assertTrue(isinstance(val, PARAMS[key]))
                 else:
                     log.debug("*** Skipping " + key + " Because value is None ***")
-
 
     def test_parameters(self):
         """
