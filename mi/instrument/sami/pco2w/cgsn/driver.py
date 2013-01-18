@@ -36,6 +36,10 @@ from mi.core.instrument.data_particle import DataParticleKey
 from mi.core.instrument.data_particle import CommonDataParticleType
 from mi.core.instrument.chunker import StringChunker
 
+# Globals
+raw_stream_received = False
+parsed_stream_received = False
+
 # newline.
 NEWLINE = '\r\n'
 
@@ -136,7 +140,17 @@ class Parameter(DriverParameter):
     Device specific parameters.
     """   
     # Configuration Parameter Information.
-    CFG_PROGRAM_DATE = 'program_date'   # TIMESTAMP = 'TIMESTAMP'
+    # Note that the key names match the sami_cache names.
+    PUMP_PULSE = 'PUMP_PULSE'
+    PUMP_ON_TO_MEASURE = 'PUMP_ON_TO_MEASURE'
+    NUM_SAMPLES_PER_MEASURE = 'NUM_SAMPLES_PER_MEASURE'
+    NUM_CYCLES_BETWEEN_BLANKS = 'NUM_CYCLES_BETWEEN_BLANKS'
+    NUM_REAGENT_CYCLES = 'NUM_REAGENT_CYCLES'
+    NUM_BLANK_CYCLES = 'NUM_BLANK_CYCLES'
+    FLUSH_PUMP_INTERVAL_SEC = 'FLUSH_PUMP_INTERVAL_SEC'
+    STARTUP_BLANK_FLUSH_ENABLE = 'STARTUP_BLANK_FLUSH_ENABLE'
+    PUMP_PULSE_POST_MEASURE_ENABLE = 'PUMP_PULSE_POST_MEASURE_ENABLE'
+    NUM_EXTRA_PUMP_CYCLES = 'NUM_EXTRA_PUMP_CYCLES'
     
 # Device prompts.
 class Prompt(BaseEnum):
@@ -149,6 +163,20 @@ class Prompt(BaseEnum):
     DEVICE_STATUS_COMMAND = 'S'
     CONFIRMATION_PROMPT = 'proceed Y/N ?'
     
+# Keep a cache dictionary for IOS exposed parameters that are actually assembled
+# from a few different commands.
+sami_cache_dict = {
+   'PUMP_PULSE' : 16,
+   'PUMP_ON_TO_MEASURE' : 32,
+   'NUM_SAMPLES_PER_MEASURE' : 0xFF,
+   'NUM_CYCLES_BETWEEN_BLANKS' : 168,
+   'NUM_REAGENT_CYCLES' : 24,
+   'NUM_BLANK_CYCLES' : 28,
+   'FLUSH_PUMP_INTERVAL_SEC' : 0x01,
+   'STARTUP_BLANK_FLUSH_ENABLE' : False,
+   'PUMP_PULSE_POST_MEASURE_ENABLE' : False,
+   'NUM_EXTRA_PUMP_CYCLES' : 56 }
+
 # Common utilities.    
 def calc_crc(s, num_points):
     cs = 0
@@ -488,6 +516,11 @@ class SamiConfigDataParticle(DataParticle):
         idx = idx + 1
         cycle_data = int(txt,16)
     
+        # Serial settings is next match.        
+        txt = match.group(idx)
+        idx = idx + 1
+        serial_settings = txt
+
         log.debug("pump_pulse = " + str(hex(pump_pulse)))
         log.debug("pump_on_to_measure = " + str(hex(pump_on_to_measure)))
         log.debug("samples_per_measure = " + str(hex(samples_per_measure)))
@@ -497,18 +530,26 @@ class SamiConfigDataParticle(DataParticle):
         log.debug("flush_pump_interval = " + str(hex(flush_pump_interval)))
         log.debug("bit_switch = " + str(hex(bit_switch)))                   
         log.debug("cycle_data = " + str(hex(cycle_data)))
+
+        # Globalize these parameters.
+        sami_cache_dict[Parameter.PUMP_PULSE] = pump_pulse;
+        sami_cache_dict[Parameter.PUMP_ON_TO_MEASURE] = pump_on_to_measure;
+        sami_cache_dict[Parameter.NUM_SAMPLES_PER_MEASURE] = samples_per_measure;
+        sami_cache_dict[Parameter.NUM_CYCLES_BETWEEN_BLANKS] = cycles_between_blanks;
+        sami_cache_dict[Parameter.NUM_REAGENT_CYCLES] = num_reagent_cycles;
+        sami_cache_dict[Parameter.NUM_BLANK_CYCLES] = num_blank_cycles;
+        sami_cache_dict[Parameter.FLUSH_PUMP_INTERVAL_SEC] = flush_pump_interval;
+        sami_cache_dict[Parameter.STARTUP_BLANK_FLUSH_ENABLE] = (blank_flush_on_start_disable == False) # Invert Logic
+        sami_cache_dict[Parameter.PUMP_PULSE_POST_MEASURE_ENABLE] = pump_pulse_post_measure;
+        sami_cache_dict[Parameter.NUM_EXTRA_PUMP_CYCLES] = cycle_data;
         
-        txt = match.group(idx)
-        idx = idx + 1
-        serial_settings = txt
-    
         #  print("duration1: " + m0.group(idx) )
         #  idx = idx + 1    
         #  print("duration2: " + m0.group(idx) )
         # idx = idx + 1    
         # print("Meaningless parameter: " + m0.group(idx) )
         # idx = idx + 1
-    
+        # Return the results as a list.
         result = [{DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.PROGRAM_DATE,
                    DataParticleKey.VALUE: program_date},
                   {DataParticleKey.VALUE_ID: SamiConfigDataParticleKey.START_TIME_OFFSET,
@@ -633,17 +674,20 @@ class SamiImmediateStatusDataParticle(DataParticle):
         external_power_on = (status_word & 0x04) == 0x04
         debug_led_on  = (status_word & 0x10) == 0        
         debug_echo_on = (status_word & 0x20) == 0
-
+        
+        # Jump in and update the parameter dictionary here!        
+        param = Parameter.PUMP_ON_TO_MEASURE;
+        param['value'] = pump_on;
         
         result = [{DataParticleKey.VALUE_ID: SamiImmediateStatusDataParticleKey.PUMP_ON,
                    DataParticleKey.VALUE: pump_on},
                   {DataParticleKey.VALUE_ID: SamiImmediateStatusDataParticleKey.VALVE_ON,
                    DataParticleKey.VALUE: valve_on},
-                  {DataParticleKey.VALUE_ID: SamiStatusDataParticleKey.EXTERNAL_POWER_ON,
+                  {DataParticleKey.VALUE_ID: SamiImmediateStatusDataParticleKey.EXTERNAL_POWER_ON,
                    DataParticleKey.VALUE: external_power_on},
-                  {DataParticleKey.VALUE_ID: SamiStatusDataParticleKey.DEBUG_LED_ON,
+                  {DataParticleKey.VALUE_ID: SamiImmediateStatusDataParticleKey.DEBUG_LED_ON,
                    DataParticleKey.VALUE: debug_led_on},
-                  {DataParticleKey.VALUE_ID: SamiStatusDataParticleKey.DEBUG_ECHO_ON,
+                  {DataParticleKey.VALUE_ID: SamiImmediateStatusDataParticleKey.DEBUG_ECHO_ON,
                    DataParticleKey.VALUE: debug_echo_on} ]
        
         return result
@@ -826,6 +870,9 @@ class Protocol(CommandResponseInstrumentProtocol):
     Instrument protocol class
     Subclasses CommandResponseInstrumentProtocol
     """
+    # Provide Cache value access
+    global sami_cache_dict
+    
     def __init__(self, prompts, newline, driver_event):
         """
         Protocol constructor.
@@ -893,12 +940,11 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         sieve_matchers = [DEVICE_STATUS_REGEX_MATCHER,
                           RECORD_TYPE4_REGEX_MATCHER,
-                          CONFIG_REGEX_MATCHER,
-                          ERROR_REGEX_MATCHER]
+                          CONFIG_REGEX_MATCHER]
 
         return_list = []
 
-        # log.debug("CJC raw_data: %s" % raw_data )
+        log.debug("CJC raw_data: %s" % raw_data )
 
         for matcher in sieve_matchers:
             for match in matcher.finditer(raw_data):
@@ -938,22 +984,84 @@ class Protocol(CommandResponseInstrumentProtocol):
         and value formatting function for set commands.
         """
         # Add parameter handlers to parameter dict.
-        cfg_line_01 = CONFIG_REGEX
+        self._param_dict.add(Parameter.PUMP_PULSE,
+            CONFIG_REGEX,
+            lambda st : sami_cache_dict[Parameter.PUMP_PULSE],
+            self._int32_to_string,
+            value = sami_cache_dict[Parameter.PUMP_PULSE],
+            default_value = 16)
         
-        #
-        # Next 2 work together to pull 2 values out of a single line.
-        #      
-        # These parameters are pulled out of the "L" Command.       
-        self._param_dict.add(Parameter.CFG_PROGRAM_DATE, 
-            cfg_line_01,
-            lambda match : match.group(1),                  # Input
+        self._param_dict.add(Parameter.PUMP_ON_TO_MEASURE,
+            CONFIG_REGEX,
+            lambda st : sami_cache_dict[Parameter.PUMP_ON_TO_MEASURE],
             self._int32_to_string,                          # Output, note needs to be 7
-            visibility=ParameterDictVisibility.READ_ONLY)
+            value = sami_cache_dict[Parameter.PUMP_ON_TO_MEASURE],
+            default_value = 32)
+        
+        self._param_dict.add(Parameter.NUM_SAMPLES_PER_MEASURE,
+            CONFIG_REGEX,
+            lambda st : sami_cache_dict[Parameter.NUM_SAMPLES_PER_MEASURE],
+            self._int32_to_string,                          # Output, note needs to be 7
+            value = sami_cache_dict[Parameter.NUM_SAMPLES_PER_MEASURE],
+            default_value = 255)
+        
+        self._param_dict.add(Parameter.NUM_CYCLES_BETWEEN_BLANKS,
+            CONFIG_REGEX,
+            lambda st : sami_cache_dict[Parameter.NUM_CYCLES_BETWEEN_BLANKS],
+            self._int32_to_string,                          # Output, note needs to be 7
+            value = sami_cache_dict[Parameter.NUM_CYCLES_BETWEEN_BLANKS],
+            default_value = 168)
+                   
+        self._param_dict.add(Parameter.NUM_REAGENT_CYCLES,
+            CONFIG_REGEX,
+            lambda st : sami_cache_dict[Parameter.NUM_REAGENT_CYCLES],
+            self._int32_to_string,                          # Output, note needs to be 7
+            value = sami_cache_dict[Parameter.NUM_REAGENT_CYCLES],
+            default_value = 24)
+                   
+        self._param_dict.add(Parameter.NUM_BLANK_CYCLES,
+            CONFIG_REGEX,
+            lambda st : sami_cache_dict[Parameter.NUM_BLANK_CYCLES],
+            self._int32_to_string,                          # Output, note needs to be 7
+            value = sami_cache_dict[Parameter.NUM_BLANK_CYCLES],
+            default_value = 28)
+
+        self._param_dict.add(Parameter.FLUSH_PUMP_INTERVAL_SEC,
+            CONFIG_REGEX,
+            lambda st : sami_cache_dict[Parameter.FLUSH_PUMP_INTERVAL_SEC],
+            self._int32_to_string,                          # Output, note needs to be 7
+            value = sami_cache_dict[Parameter.FLUSH_PUMP_INTERVAL_SEC],
+            default_value = 1)
+
+        self._param_dict.add(Parameter.STARTUP_BLANK_FLUSH_ENABLE,
+            CONFIG_REGEX,
+            lambda st : sami_cache_dict[Parameter.STARTUP_BLANK_FLUSH_ENABLE],
+            self._int32_to_string,                          # Output, note needs to be 7
+            value = sami_cache_dict[Parameter.STARTUP_BLANK_FLUSH_ENABLE],
+            default_value = False)
+
+        self._param_dict.add(Parameter.PUMP_PULSE_POST_MEASURE_ENABLE,
+            CONFIG_REGEX,
+            lambda st : sami_cache_dict[Parameter.PUMP_PULSE_POST_MEASURE_ENABLE],
+            self._int32_to_string,                          # Output, note needs to be 7
+            value = sami_cache_dict[Parameter.PUMP_PULSE_POST_MEASURE_ENABLE],
+            default_value = False)
+        
+        self._param_dict.add(Parameter.NUM_EXTRA_PUMP_CYCLES,
+            CONFIG_REGEX,
+            lambda st : sami_cache_dict[Parameter.NUM_EXTRA_PUMP_CYCLES],
+            self._int32_to_string,                          # Output, note needs to be 7
+            value = sami_cache_dict[Parameter.NUM_EXTRA_PUMP_CYCLES],
+            default_value = 56)
+        
+        local_dict = self._param_dict.get_config()
+#        log.debug("&&&&&&&&&&&&& _build_param_dict: _param_dict: %s" % local_dict)
+#        log.debug("^^^^^^^^^^^^^  at same time the adcpt_cache_dict is %s" % adcpt_cache_dict)
         
     def _got_chunk(self, chunk):
         """
         The base class got_data has gotten a chunk from the chunker.  Pass it to extract_sample
-        with the appropriate particle objects and REGEXes.
+        with the appropriate parcle objects and REGEXes.
         """
         if(self._extract_sample(SamiRecordDataParticle, RECORD_TYPE4_REGEX_MATCHER, chunk)):
             log.debug("_got_chunk of Record Data = Passed good")
@@ -970,25 +1078,6 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         events_out = [x for x in events if Capability.has(x)]
         return events_out
-
-    def get_config(self, *args, **kwargs):
-        """ Get the entire configuration for the instrument
-        
-        @param params The parameters and values to set
-        @retval None if nothing was done, otherwise result of FSM event handle
-        Should be a dict of parameters and values
-        @throws InstrumentProtocolException On invalid parameter
-        """
-        config = self._protocol_fsm.on_event(ProtocolEvent.GET, [Parameter.CFG_PROGRAM_DATE], **kwargs)
-        assert (isinstance(config, dict))
-        assert (config.has_key(Parameter.CFG_PROGRAM_DATE))
-        
-        # Make sure we get these
-        # TODO: endless loops seem like really bad idea
-        while config[Parameter.CFG_PROGRAM_DATE] == InstErrorCode.HARDWARE_ERROR:
-            config[Parameter.CFG_PROGRAM_DATE] = self._protocol_fsm.on_event(ProtocolEvent.GET, [Parameter.CFG_PROGRAM_DATE])
-  
-        return config
     
     ########################################################################
     # Unknown handlers.
@@ -1105,31 +1194,37 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         return (next_state, (next_agent_state, result))
 
-    def _handler_command_get(self, params=None, *args, **kwargs):
+    def _handler_command_get(self, *args, **kwargs):
         """
+        Get parameter
         """
-        next_state = None
+        log.debug("^^^^^^^^^^^^^^^^^^ FSM_TRACKER: in _handler_command_get")
+        next_state = ProtocolState.COMMAND
         result = None
-
-        log.debug("Testing _handler_command_get")
-
-        # All parameters that can be set by the instrument.  Explicitly
-        # excludes parameters from the instrument header.
-        if (params == DriverParameter.ALL):
-            params = [Parameter.CFG_PROGRAM_DATE]
-            
-        if ((params == None) or (not isinstance(params, list))):
-            raise InstrumentParameterException()
         
-        result_vals = {}
-        for param in params:
-            if not Parameter.has(param):
-                raise InstrumentParameterException()
-            result_vals[param] = self._param_dict.get(param) 
+        self._build_param_dict()     #make sure data is up-to-date
 
-        result = result_vals
+        # Retrieve the required parameter, raise if not present.
+        try:
+            params = args[0]
 
-        log.debug("Get finished, next: %s, result: %s", next_state, result) 
+        except IndexError:
+            raise InstrumentParameterException('Get command requires a parameter list or tuple.')
+
+        # If all params requested, retrieve config.
+        if params == DriverParameter.ALL or DriverParameter.ALL in params:
+            result = self._param_dict.get_config()
+        else:
+            # If not all params, confirm a list or tuple of params to retrieve.
+            # Raise if not a list or tuple.
+            # Retireve each key in the list, raise if any are invalid.
+            if not isinstance(params, (list, tuple)):
+                raise InstrumentParameterException('Get argument not a list or tuple.')
+            result = {}
+            for key in params:
+                val = self._param_dict.get(key)
+                result[key] = val
+
         return (next_state, result)
     
     def _handler_command_set(self, params, *args, **kwargs):
@@ -1362,6 +1457,22 @@ class Protocol(CommandResponseInstrumentProtocol):
         """There is no wakeup sequence for this instrument"""
         pass
     
+    def _update_params(self, *args, **kwargs):
+        """Fetch the parameters from the device, and update the param dict.
+        
+        @param args Unused
+        @param kwargs Takes timeout value
+        @throws InstrumentProtocolException
+        @throws InstrumentTimeoutException
+        """
+        log.debug("Updating parameter dict")
+        old_config = self._param_dict.get_config()
+        self.get_config()
+        new_config = self._param_dict.get_config()            
+        if (new_config != old_config):
+            log.debug("_update_params - ConfigChange")
+            self._driver_event(DriverAsyncEvent.CONFIG_CHANGE)            
+            
     ########################################################################
     # Static helpers to format set commands.
     ########################################################################
