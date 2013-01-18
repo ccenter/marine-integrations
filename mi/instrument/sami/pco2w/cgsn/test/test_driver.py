@@ -148,7 +148,16 @@ class DataParticleMixin(DriverTestMixin):
     ##
     _driver_parameters = {
         # DS # parameters - contains all setsampling parameters
-        Parameter.CFG_PROGRAM_DATE : int  
+        Parameter.PUMP_PULSE : { 'type' : int, 'value' : 1 },
+        Parameter.PUMP_ON_TO_MEASURE : { 'type' : int, 'value' : 2 },
+        Parameter.NUM_SAMPLES_PER_MEASURE : { 'type' : int, 'value' : 3 },
+        Parameter.NUM_CYCLES_BETWEEN_BLANKS : { 'type' : int, 'value' : 4 },
+        Parameter.NUM_REAGENT_CYCLES : { 'type' : int, 'value' : 5 },
+        Parameter.NUM_BLANK_CYCLES : { 'type' : int, 'value' : 6 },
+        Parameter.FLUSH_PUMP_INTERVAL_SEC : { 'type' : int, 'value' : 7 },
+        Parameter.STARTUP_BLANK_FLUSH_ENABLE : { 'type' : bool, 'value' : False },
+        Parameter.PUMP_PULSE_POST_MEASURE_ENABLE : { 'type' : bool, 'value' : False },
+        Parameter.NUM_EXTRA_PUMP_CYCLES : { 'type' : int, 'value' : 8 }
     }
 
     # Test results that get decoded from the string sent to the chunker.   
@@ -341,6 +350,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         
         if event_type == DriverAsyncEvent.SAMPLE:
             sample_value = event['value']
+            log.debug("event_type == SAMPLE")
             particle_dict = json.loads(sample_value)
             stream_type = particle_dict['stream_name']        
             if stream_type == 'raw':
@@ -355,14 +365,14 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         Verify that all driver enumeration has no duplicate values that might cause confusion.  Also
         do a little extra validation for the Capabilites
         """
-#        self.assert_enum_has_no_duplicates(DataParticleType())
-#        self.assert_enum_has_no_duplicates(InstrumentCmds())
-#        self.assert_enum_has_no_duplicates(ProtocolState())
-#        self.assert_enum_has_no_duplicates(ProtocolEvent())
-#        self.assert_enum_has_no_duplicates(Parameter())
+        self.assert_enum_has_no_duplicates(DataParticleType())
+        self.assert_enum_has_no_duplicates(InstrumentCmds())
+        self.assert_enum_has_no_duplicates(ProtocolState())
+        self.assert_enum_has_no_duplicates(ProtocolEvent())
+        self.assert_enum_has_no_duplicates(Parameter())
 
         # Test capabilites for duplicates, them verify that capabilities is a subset of proto events
-#        self.assert_enum_has_no_duplicates(Capability())
+        self.assert_enum_has_no_duplicates(Capability())
         self.assert_enum_complete(Capability(), ProtocolEvent())
 
 
@@ -384,12 +394,6 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         self.assert_chunker_fragmented_sample(chunker, test_data)
         self.assert_chunker_combined_sample(chunker, test_data)
         
-        test_data = SAMPLE_ERR_DATA
-        self.assert_chunker_sample(chunker, test_data)
-        self.assert_chunker_sample_with_noise(chunker, test_data)
-        self.assert_chunker_fragmented_sample(chunker, test_data)
-        self.assert_chunker_combined_sample(chunker, test_data)
-
     def test_got_data(self):
         """
         Verify sample data passed through the got data method produces the correct data particles
@@ -433,14 +437,18 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         driver = InstrumentDriver(self._got_data_event_callback)
         self.assert_initialize_driver(driver, ProtocolState.COMMAND)
 
+        my_parameters = sorted(driver.get_resource(Parameter.ALL))
+        log.debug("my parameters: %s" % my_parameters)
+
         expected_parameters = sorted(self._driver_parameters.keys())
         reported_parameters = sorted(driver.get_resource(Parameter.ALL))
-
+        
         log.debug("Reported Parameters: %s" % reported_parameters)
         log.debug("Expected Parameters: %s" % expected_parameters)
-
         self.assertEqual(reported_parameters, expected_parameters)
 
+        # Verify the parameter definitions
+        self.assert_driver_parameter_definition(driver, self._driver_parameters)
 
     def test_capabilities(self):
         """
@@ -470,7 +478,6 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         temp_driver = InstrumentDriver(self.mock_event_callback)       
         current_state = temp_driver.get_resource_state()
         self.assertEqual(current_state, DriverConnectionState.UNCONFIGURED)
-        log.debug("got here 1")
         
         """
         Now configure the driver with the mock_port_agent, verifying
@@ -480,7 +487,6 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         temp_driver.configure(config = config)
         current_state = temp_driver.get_resource_state()
         self.assertEqual(current_state, DriverConnectionState.DISCONNECTED)
-        log.debug("got here 2")
         
         """
         Invoke the connect method of the driver: should connect to mock
@@ -490,48 +496,8 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         temp_driver.connect()
         current_state = temp_driver.get_resource_state()
         self.assertEqual(current_state, DriverProtocolState.UNKNOWN)
-        log.debug("got here 3")
         return( temp_driver )
     
-    def test_get_current_capabilities(self):
-        temp_driver = self._mock_me()
-        
-        result = temp_driver._protocol.get_resource_capabilities()
-        self.assertEqual(result[0], [])
-        self.assertEqual(result[1], [Parameter.CFG_PROGRAM_DATE])
-        
-        """
-        Force the driver into AUTOSAMPLE state so that it will parse and 
-        publish samples
-        """        
-        temp_driver.set_test_mode(True)
-        temp_driver.test_force_state(state = DriverProtocolState.AUTOSAMPLE)
-        current_state = temp_driver.get_resource_state()
-        self.assertEqual(current_state, DriverProtocolState.AUTOSAMPLE)
-        result = temp_driver._protocol.get_resource_capabilities()
-        self.assertEqual(result[0], [Capability.STOP_AUTOSAMPLE])
-        self.assertEqual(result[1], [Parameter.CFG_PROGRAM_DATE])
-        
-        # Next test working.
-        temp_driver.test_force_state(state = DriverProtocolState.COMMAND)
-        current_state = temp_driver.get_resource_state()
-        self.assertEqual(current_state, DriverProtocolState.COMMAND)  # Was AUTOSAMPLE
-        log.debug("got here 4")
-        
-        self.reset_test_vars()
-        
-        # Ship (mock) this data to the instrument.
-        packet = PortAgentPacket()
-#        header = "\xa3\x9d\x7a\x02\x00\x1c\x0b\x2e\x00\x00\x00\x01\x80\x00\x00\x00" 
-#        packet.unpack_header(header) 
-        packet.attach_data(SAMPLE_DEVICE_STATUS_DATA) 
-        log.debug("got here 5")
-
-        temp_driver._protocol.got_data(packet)
-        
-        self.assertFalse(self.raw_stream_received)
-        self.assertFalse(self.parsed_stream_received)
-
     def test_complete_sample(self):
         temp_driver = self._mock_me()
         
