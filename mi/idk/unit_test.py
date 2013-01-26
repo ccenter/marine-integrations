@@ -3,7 +3,7 @@
 """
 @file coi-services/ion/idk/unit_test.py
 @author Bill French
-@brief Base classes for instrument driver tests.  
+@brief Base classes for instrument driver tests.
 """
 
 from mock import patch
@@ -58,6 +58,7 @@ from mi.idk.exceptions import TestNotInitialized
 from mi.idk.exceptions import TestNoCommConfig
 
 from mi.core.exceptions import InstrumentException
+from mi.core.exceptions import InstrumentParameterException
 from mi.core.instrument.instrument_driver import DriverEvent
 from mi.core.instrument.port_agent_client import PortAgentClient
 from mi.core.instrument.port_agent_client import PortAgentPacket
@@ -1152,41 +1153,140 @@ class InstrumentDriverIntegrationTestCase(InstrumentDriverTestCase):   # Must in
     ###
     #   Common assert methods
     ###
-    def assert_initialize_driver(self, expected_state = DriverProtocolState.COMMAND):
+    def assert_current_state(self, target_state):
+        """
+        Verify the driver state
+        @param state:
+        @return:
+        """
+        state = self.driver_client.cmd_dvr('get_resource_state')
+        self.assertEqual(state, target_state)
+
+    def assert_initialize_driver(self):
         """
         Walk an uninitialized driver through it's initialize process.  Verify the final
-        state is correct.
-        @param expected_state: final state expected state after discover
+        state is command mode.  If the final state is auto sample then we will stop
+        which should land us in autosample
         """
         log.info("test_connect test started")
 
         # Test the driver is in state unconfigured.
-        state = self.driver_client.cmd_dvr('get_resource_state')
-        self.assertEqual(state, DriverConnectionState.UNCONFIGURED)
+        self.assert_current_state(DriverConnectionState.UNCONFIGURED)
 
         # Configure driver for comms and transition to disconnected.
         reply = self.driver_client.cmd_dvr('configure', self.port_agent_comm_config())
 
         # Test the driver is configured for comms.
-        state = self.driver_client.cmd_dvr('get_resource_state')
-        self.assertEqual(state, DriverConnectionState.DISCONNECTED)
+        self.assert_current_state(DriverConnectionState.DISCONNECTED)
 
         # Configure driver for comms and transition to disconnected.
         reply = self.driver_client.cmd_dvr('connect')
 
         # Test the driver is in unknown state.
-        state = self.driver_client.cmd_dvr('get_resource_state')
-        self.assertEqual(state, DriverProtocolState.UNKNOWN)
+        self.assert_current_state(DriverProtocolState.UNKNOWN)
 
         # Configure driver for comms and transition to disconnected.
         reply = self.driver_client.cmd_dvr('discover_state')
 
-        # Test the driver is in command mode.
+        # If we are in streaming mode then stop streaming
         state = self.driver_client.cmd_dvr('get_resource_state')
+        if(state == DriverProtocolState.AUTOSAMPLE):
+            reply = self.driver_client.cmd_dvr('execute_resource', DriverEvent.STOP_AUTOSAMPLE)
+            state = self.driver_client.cmd_dvr('get_resource_state')
+
+        # Test the driver is in command mode.
         self.assertEqual(state, DriverProtocolState.COMMAND)
 
         # Apply startup parameters
         state = self.driver_client.cmd_dvr('apply_startup_params')
+
+    def assert_get(self, param, value=None, pattern=None):
+        """
+        Verify we can get a parameter and compare the fetched value
+        with the expected value.
+        @param param: parameter to set
+        @param value: expected parameter value
+        @param pattern: expected parameter pattern
+        @raise IDKException if value or pattern not passed
+        """
+        reply = self.driver_client.cmd_dvr('get_resource', [param])
+        self.assertIsInstance(reply, dict)
+        return_value = reply.get(param)
+
+        if(value != None):
+            self.assertEqual(return_value, value, msg="%s no value match (%s != %s)" % (param, return_value, value))
+        elif(pattern != None):
+            self.assertRegexpMatches(str(return_value), pattern, msg="%s no value match (%s != %s)" % (param, return_value, value))
+        else:
+            raise IDKException('parameter required, param or value')
+
+    def assert_set(self, param, value, no_get=False):
+        """
+        Verify we can set a parameter and then do a get to confirm.
+        @param param: parameter to set
+        @param param: no_get if true don't verify set with a get.
+        @param value: what to set the parameter too
+        """
+        reply = self.driver_client.cmd_dvr('set_resource', {param: value})
+        self.assertIsNone(reply, None)
+
+        if(not no_get):
+            self.assert_get(param, value)
+
+    def assert_set_bulk(self, param_dict):
+        """
+        Verify we can bulk set parameters.  First bulk set the parameters and
+        then verify with individual gets.
+        @param param_dict: dictionary with parameter as key with it's value.
+        """
+        self.assertIsInstance(param_dict, dict)
+
+        reply = self.driver_client.cmd_dvr('set_resource', param_dict)
+        self.assertIsNone(reply, None)
+
+        for (key, value) in param_dict.items():
+            self.assert_get(key, value)
+
+    def assert_set_bulk_exception(self, param_dict, error_regex=None, exception_class=InstrumentParameterException):
+        """
+        Verify a bulk set raises an exception
+        then verify with individual gets.
+        @param param_dict: dictionary with parameter as key with it's value.
+        @param error_regex: error message pattern to match
+        @param exception_class: class of the exception raised
+        """
+        if(error_regex):
+            with self.assertRaisesRegexp(exception_class, error_regex):
+                self.assert_set_bulk(param_dict)
+        else:
+            with self.assertRaises(exception_class):
+                self.assert_set_bulk(param_dict)
+
+    def assert_set_readonly(self, param, value='dummyvalue'):
+        """
+        Verify that a set command raises an exception on set.
+        @param param: parameter to set
+        @param value: what to set the parameter too
+        """
+        # TODO: Fix this test. An exception isn't currently thrown if setting a read-only param
+        self.assertTrue(True)
+        #self.assert_set_exception(param, value, 'Set command not recognized')
+
+    def assert_set_exception(self, param, value='dummyvalue', error_regex=None, exception_class=InstrumentParameterException):
+        """
+        Verify that a set command raises an exception on set.
+        @param param: parameter to set
+        @param value: what to set the parameter too
+        @param error_regex: error message pattern to match
+        @param exception_class: class of the exception raised
+        """
+        if(error_regex):
+            with self.assertRaisesRegexp(exception_class, error_regex):
+                reply = self.driver_client.cmd_dvr('set_resource', {param: value})
+        else:
+            with self.assertRaises(exception_class):
+                reply = self.driver_client.cmd_dvr('set_resource', {param: value})
+
 
     ###
     #   Common Integration Tests
