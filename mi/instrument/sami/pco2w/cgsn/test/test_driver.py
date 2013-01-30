@@ -73,6 +73,13 @@ from mi.instrument.sami.pco2w.cgsn.driver import SamiStatusDataParticleKey
 from mi.instrument.sami.pco2w.cgsn.driver import SamiConfigDataParticle
 from mi.instrument.sami.pco2w.cgsn.driver import SamiConfigDataParticleKey
 from mi.core.instrument.chunker import StringChunker
+
+from mi.core.exceptions import InstrumentProtocolException
+from mi.core.exceptions import InstrumentDataException
+from mi.core.exceptions import InstrumentCommandException
+from mi.core.exceptions import InstrumentStateException
+from mi.core.exceptions import InstrumentParameterException
+
 from mi.core.instrument.data_particle import DataParticleKey, DataParticleValue
 
 ###
@@ -80,12 +87,13 @@ from mi.core.instrument.data_particle import DataParticleKey, DataParticleValue
 ###
 SAMPLE_IMMEDIATE_STATUS_DATA = "10" + NEWLINE
 SAMPLE_ERR_DATA = "?03" + NEWLINE
-SAMPLE_RECORD_DATA = "*5B2704C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B" + NEWLINE
-SAMPLE_DEVICE_STATUS_DATA = ":000029ED40" + NEWLINE
-#                            :0033A5800000000000000000000000F7
-SAMPLE_DEVICE_STATUS_DATA_BAD = "000029ED40" + NEWLINE
+SAMPLE_RECORD_DATA = "*5B2704C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B"  + NEWLINE
+# SAMPLE_DEVICE_STATUS_DATA = ":000029ED40"  + NEWLINE
+SAMPLE_DEVICE_STATUS_DATA = ":003F91BE0000000000000000000000F7" + NEWLINE
+SAMPLE_DEVICE_STATUS_DATA_BAD = "000029ED40"  + NEWLINE
 # SAMPLE_CONFIG_DATA = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C1020FFA8181C010038100101202564000433383335000200010200020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" + NEWLINE
-SAMPLE_CONFIG_DATA_1 = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C071020FFA8181C010038100101202564000433383335000200010200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" + NEWLINE
+# This sample configuration is from the PCO2W_Low_Level_SAMI_Use document.
+SAMPLE_CONFIG_DATA_1 = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C071020FFA8181C010038100101202564000433383335000200010200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"  + NEWLINE
 
 #                     :000029ED4000000000000000000000F7" + NEWLINE
 
@@ -174,21 +182,21 @@ class DataParticleMixin(DriverTestMixin):
    
     # Test results that get decoded from the string sent to the chunker.
     _device_status_parameters = {
-        SamiStatusDataParticleKey.TIME_OFFSET:          { 'type': int, 'value': 2},
+        SamiStatusDataParticleKey.TIME_OFFSET:          { 'type': int, 'value': 0x3F91BE},  # 48 5:14:38
         SamiStatusDataParticleKey.CLOCK_ACTIVE:         { 'type': bool, 'value': False},
         SamiStatusDataParticleKey.RECORDING_ACTIVE:     { 'type': bool, 'value': False },
-        SamiStatusDataParticleKey.RECORD_END_ON_TIME:   { 'type': bool, 'value': True },
+        SamiStatusDataParticleKey.RECORD_END_ON_TIME:   { 'type': bool, 'value': False },
         SamiStatusDataParticleKey.RECORD_MEMORY_FULL:   { 'type': bool, 'value': False },
-        SamiStatusDataParticleKey.RECORD_END_ON_ERROR:  { 'type': bool, 'value': True },
+        SamiStatusDataParticleKey.RECORD_END_ON_ERROR:  { 'type': bool, 'value': False },
         SamiStatusDataParticleKey.DATA_DOWNLOAD_OK:     { 'type': bool, 'value': False },
-        SamiStatusDataParticleKey.FLASH_MEMORY_OPEN:    { 'type': bool, 'value': True },
-        SamiStatusDataParticleKey.BATTERY_FATAL_ERROR:  { 'type': bool, 'value': True },
+        SamiStatusDataParticleKey.FLASH_MEMORY_OPEN:    { 'type': bool, 'value': False },
+        SamiStatusDataParticleKey.BATTERY_FATAL_ERROR:  { 'type': bool, 'value': False },
         SamiStatusDataParticleKey.BATTERY_LOW_MEASUREMENT: { 'type': bool, 'value': False },
-        SamiStatusDataParticleKey.BATTERY_LOW_BANK:     { 'type': bool, 'value': True },
-        SamiStatusDataParticleKey.BATTERY_LOW_EXTERNAL: { 'type': bool, 'value': True },
-        SamiStatusDataParticleKey.EXTERNAL_DEVICE_FAULT:{ 'type': int,  'value': 0x3 },
+        SamiStatusDataParticleKey.BATTERY_LOW_BANK:     { 'type': bool, 'value': False },
+        SamiStatusDataParticleKey.BATTERY_LOW_EXTERNAL: { 'type': bool, 'value': False },
+        SamiStatusDataParticleKey.EXTERNAL_DEVICE_FAULT:{ 'type': int,  'value': 0x0 },
         SamiStatusDataParticleKey.FLASH_ERASED:         { 'type': bool, 'value': False },
-        SamiStatusDataParticleKey.POWER_ON_INVALID:     { 'type': bool, 'value': True }
+        SamiStatusDataParticleKey.POWER_ON_INVALID:     { 'type': bool, 'value': False }
     }
     
     # Test for Immediate Status.
@@ -242,7 +250,7 @@ class DataParticleMixin(DriverTestMixin):
         SamiConfigDataParticleKey.NUM_REAGENT_CYCLES:     { 'type': int, 'value': 0x18 },
         SamiConfigDataParticleKey.NUM_BLANK_CYCLES:       { 'type': int, 'value': 0x1C },
         SamiConfigDataParticleKey.FLUSH_PUMP_INTERVAL:    { 'type': int, 'value': 0x1 },
-        SamiConfigDataParticleKey.BLANK_FLUSH_ON_START_DISABLE:   { 'type': bool,'value': False },
+        SamiConfigDataParticleKey.BLANK_FLUSH_ON_START_ENABLE:   { 'type': bool,'value': True },
         SamiConfigDataParticleKey.PUMP_PULSE_POST_MEASURE:{ 'type': bool,'value': False },
         SamiConfigDataParticleKey.CYCLE_DATA:             { 'type': int, 'value': 0x38 },                         
         SamiConfigDataParticleKey.SERIAL_SETTINGS:        { 'type': unicode, 'value': u'10010120256400043338333500' }
@@ -382,12 +390,6 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         """
         chunker = StringChunker(Protocol.sieve_function)
 
-        test_data = SAMPLE_DEVICE_STATUS_DATA      
-        self.assert_chunker_sample(chunker, test_data)
-        self.assert_chunker_sample_with_noise(chunker, test_data)
-        self.assert_chunker_fragmented_sample(chunker, test_data)
-        self.assert_chunker_combined_sample(chunker, test_data)
-
         test_data = SAMPLE_RECORD_DATA      
         self.assert_chunker_sample(chunker, test_data)
         self.assert_chunker_sample_with_noise(chunker, test_data)
@@ -448,6 +450,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         self.assertEqual(reported_parameters, expected_parameters)
 
         # Verify the parameter definitions
+        log.debug("got here tdp")
         self.assert_driver_parameter_definition(driver, self._driver_parameters)
 
     def test_capabilities(self):
@@ -478,6 +481,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         temp_driver = InstrumentDriver(self.mock_event_callback)       
         current_state = temp_driver.get_resource_state()
         self.assertEqual(current_state, DriverConnectionState.UNCONFIGURED)
+        log.debug("got here 1")
         
         """
         Now configure the driver with the mock_port_agent, verifying
@@ -487,6 +491,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         temp_driver.configure(config = config)
         current_state = temp_driver.get_resource_state()
         self.assertEqual(current_state, DriverConnectionState.DISCONNECTED)
+        log.debug("got here 2")
         
         """
         Invoke the connect method of the driver: should connect to mock
@@ -496,6 +501,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         temp_driver.connect()
         current_state = temp_driver.get_resource_state()
         self.assertEqual(current_state, DriverProtocolState.UNKNOWN)
+        log.debug("got here 3")
         return( temp_driver )
     
     def test_complete_sample(self):
@@ -529,6 +535,10 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase):
     def setUp(self):
         InstrumentDriverIntegrationTestCase.setUp(self)
 
+    def check_state(self, expected_state):
+        state = self.driver_client.cmd_dvr('get_resource_state')
+        self.assertEqual(state, expected_state)
+        
     ###
     #    Add instrument specific integration tests
     ###
@@ -559,6 +569,52 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase):
                 else:
                     log.debug("*** Skipping " + key + " Because value is None ***")
 
+    def put_instrument_in_command_mode(self):
+        """Wrap the steps and asserts for going into command mode.
+           May be used in multiple test cases.
+        """
+        # Test that the driver is in state unconfigured.
+        self.check_state(DriverConnectionState.UNCONFIGURED)
+
+        # Configure driver and transition to disconnected.
+        self.driver_client.cmd_dvr('configure', self.port_agent_comm_config())
+
+        # Test that the driver is in state disconnected.
+        self.check_state(DriverConnectionState.DISCONNECTED)
+
+        # Setup the protocol state machine and the connection to port agent.
+        self.driver_client.cmd_dvr('connect')
+
+        # Test that the driver protocol is in state unknown.
+        self.check_state(ProtocolState.UNKNOWN)
+
+        # Discover what state the instrument is in and set the protocol state accordingly.
+        self.driver_client.cmd_dvr('discover_state')
+
+        # Test that the driver protocol is in state command.
+        self.check_state(ProtocolState.COMMAND)
+        log.debug("**************** COMMAND ***************")
+        
+    def test_startup_configuration(self):
+        '''
+        Test that the startup configuration is applied correctly
+        '''
+        self.put_instrument_in_command_mode()
+
+        result = self.driver_client.cmd_dvr('apply_startup_params')
+
+        reply = self.driver_client.cmd_dvr('get_resource', [Parameter.PUMP_PULSE])
+
+        self.assertEquals(reply, {Parameter.PUMP_PULSE: 24})
+
+        params = {
+            Parameter.PUMP_PULSE : 24
+#            Parameter.TXWAVESTATS : False,
+#            Parameter.USER_INFO : "KILROY WAZ HERE"
+        }
+        reply = self.driver_client.cmd_dvr('set_resource', params)
+        self.assertEqual(reply, None)
+        
     def test_parameters(self):
         """
         Test driver parameters and verify their type.  Startup parameters also verify the parameter
@@ -567,6 +623,56 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase):
         """
         self.assert_initialize_driver()
         reply = self.driver_client.cmd_dvr('get_resource', Parameter.ALL)
+
+    def test_get(self):        
+        self.put_instrument_in_command_mode()
+
+        params = {
+                   Parameter.PUMP_PULSE: 16,
+                   Parameter.PUMP_ON_TO_MEASURE: 32
+        }
+
+        log.debug("<<<<<<<<<<<<<<< get/set Test 1 - Pump Stuff >>>>>>>>>>>>>>>>>>>>>.")
+        
+        reply = self.driver_client.cmd_dvr('set_resource', params)
+        log.debug("got here___________________________ 1")
+        self.assertEqual(reply, None)
+        log.debug("got here___________________________ 2")
+
+        reply = self.driver_client.cmd_dvr('get_resource', Parameter.ALL)
+        log.debug("got here___________________________ 3")
+        self.assert_param_dict(reply)
+        log.debug("<<<<<<<<<<<<<<< Done >>>>>>>>>>>>>>>>>>>>>.")
+"""        
+        reply = self.driver_client.cmd_dvr('get_resource',
+                                           params.keys(),
+                                           timeout=20)
+        
+        self.assertEquals(reply, params)
+        
+        log.debug("past assertEquals()")
+        
+        self.assertRaises(InstrumentCommandException,
+                          self.driver_client.cmd_dvr,
+                          'bogus', [Parameter.PUMP_PULSE])
+
+        # Assert get fails without a paramet
+        self.assertRaises(InstrumentParameterException,
+                          self.driver_client.cmd_dvr, 'get_resource')
+            
+        # Assert get fails with a bad parameter (not ALL or a list).
+        with self.assertRaises(InstrumentParameterException):
+            bogus_params = 'I am a bogus param list.'
+            self.driver_client.cmd_dvr('get_resource', bogus_params)
+            
+        # Assert get fails with a bad parameter in a list).
+        with self.assertRaises(InstrumentParameterException):
+            bogus_params = [
+                'a bogus parameter name',
+                Parameter.PUMP_PULSE
+                ]
+            self.driver_client.cmd_dvr('get_resource', bogus_params)
+"""
 
 ###############################################################################
 #                            QUALIFICATION TESTS                              #
