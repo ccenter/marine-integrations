@@ -75,6 +75,8 @@ from mi.instrument.sami.pco2w.cgsn.driver import SamiStatusDataParticle
 from mi.instrument.sami.pco2w.cgsn.driver import SamiStatusDataParticleKey
 from mi.instrument.sami.pco2w.cgsn.driver import SamiConfigDataParticle
 from mi.instrument.sami.pco2w.cgsn.driver import SamiConfigDataParticleKey
+from mi.instrument.sami.pco2w.cgsn.driver import SamiErrorDataParticle
+from mi.instrument.sami.pco2w.cgsn.driver import SamiErrorDataParticleKey
 
 from mi.core.exceptions import InstrumentProtocolException
 from mi.core.exceptions import InstrumentDataException
@@ -92,10 +94,10 @@ STARTUP = ParameterTestConfigKey.STARTUP
 
 # SAMI Test Strings
 SAMPLE_IMMEDIATE_STATUS_DATA = "10" + NEWLINE
-SAMPLE_ERR_DATA = "?03" + NEWLINE
+SAMPLE_ERROR_DATA = "?03" + NEWLINE
 SAMPLE_RECORD_DATA = "*5B2704C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B"  + NEWLINE
 # SAMPLE_DEVICE_STATUS_DATA = ":000029ED40"  + NEWLINE
-SAMPLE_DEVICE_STATUS_DATA = ":003F91BE0000000000000000000000F7" + NEWLINE
+SAMPLE_DEVICE_STATUS_DATA = ":003F91BE00000000" # :003F91BE0000000000000000000000F7" + NEWLINE
 SAMPLE_DEVICE_STATUS_DATA_BAD = "000029ED40"  + NEWLINE
 # SAMPLE_CONFIG_DATA = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C1020FFA8181C010038100101202564000433383335000200010200020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" + NEWLINE
 # This sample configuration is from the PCO2W_Low_Level_SAMI_Use document.
@@ -214,6 +216,11 @@ class DataParticleMixin(DriverTestMixin):
         SamiImmediateStatusDataParticleKey.DEBUG_ECHO_ON:    { 'type': bool, STARTUP: False, 'value': False }
     }
     
+    # Test Error Information
+    _error_parameters = {
+        SamiErrorDataParticleKey.ERROR_MESSAGE:{ 'type': unicode, STARTUP: False, 'value': u'Command Buffer Overflow' }
+    }
+    
     # Test Results that get decoded from the Configuration
     _config_parameters = {
         SamiConfigDataParticleKey.PROGRAM_DATE_TIME:{ 'type': int, STARTUP: False, 'value': 0xCAB39E84}, # 3400769156 = 0xCAB39E84
@@ -327,6 +334,13 @@ class DataParticleMixin(DriverTestMixin):
         self.assert_data_particle_header(data_particle, DataParticleType.RECORD_PARSED)
         self.assert_data_particle_parameters(data_particle, self._data_record_parameters, verify_values)
 
+    def assert_particle_error(self, data_particle, verify_values = False):
+        '''
+        Error response.
+        '''
+        self.assert_data_particle_header(data_particle, DataParticleType.ERROR_PARSED)
+        self.assert_data_particle_parameters(data_particle, self._error_parameters, verify_values)
+
 ###############################################################################
 #                                UNIT TESTS                                   #
 #         Unit tests test the method calls and parameters using Mock.         #
@@ -401,7 +415,21 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         self.assert_chunker_sample_with_noise(chunker, test_data)
         self.assert_chunker_fragmented_sample(chunker, test_data)
         self.assert_chunker_combined_sample(chunker, test_data)
-        
+
+        test_data = SAMPLE_DEVICE_STATUS_DATA      
+        self.assert_chunker_sample(chunker, test_data)
+        self.assert_chunker_sample_with_noise(chunker, test_data)
+        self.assert_chunker_fragmented_sample(chunker, test_data)
+        self.assert_chunker_combined_sample(chunker, test_data)
+        '''        
+        # This is test data and should be handled elsewhere.
+        test_data = SAMPLE_ERROR_DATA      
+        self.assert_chunker_sample(chunker, test_data)
+        self.assert_chunker_sample_with_noise(chunker, test_data)
+        self.assert_chunker_fragmented_sample(chunker, test_data)
+        self.assert_chunker_combined_sample(chunker, test_data)
+        '''
+
     def test_got_data(self):
         """
         Verify sample data passed through the got data method produces the correct data particles
@@ -415,7 +443,9 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         self.assert_particle_published(driver, SAMPLE_DEVICE_STATUS_DATA, self.assert_particle_device_status, True)
         self.assert_particle_published(driver, SAMPLE_RECORD_DATA, self.assert_particle_record_data, True)
         self.assert_particle_published(driver, SAMPLE_CONFIG_DATA_1, self.assert_particle_configuration, True)
-        self.assert_particle_published(driver, SAMPLE_IMMEDIATE_STATUS_DATA, self.assert_particle_immediate_status, True)
+#??        self.assert_particle_published(driver, SAMPLE_ERROR_DATA, self.assert_particle_error, True)
+        # Sami Immediate status is a command.
+        # self.assert_particle_published(driver, SAMPLE_IMMEDIATE_STATUS_DATA, self.assert_particle_immediate_status, True)
 
     def test_cjc(self):
         """
@@ -658,13 +688,9 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase):
         """
         Test all set commands. Verify all exception cases.
         """
-        self.assert_initialize_driver()
-        
-        set_time_sec = get_timestamp_delayed_sec()
-        expected_time_sec = get_timestamp_delayed_sec()
-    
-        self.assert_set(Parameter.PROGRAM_DATE_TIME, set_time_sec, no_get=True)
-        self.assert_get(Parameter.PROGRAM_DATE_TIME, expected_time_sec)
+        self.assert_initialize_driver()   
+        self.assert_set(Parameter.PUMP_PULSE, 0x00, no_get=True)
+        self.assert_get(Parameter.PUMP_PULSE, 0x16)
 
     def test_get(self):        
         self.put_instrument_in_command_mode()
@@ -726,7 +752,7 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase):
         self.assert_initialize_driver()
 
         # Change something
-        self.assert_set(Parameter.USE_BAUD_RATE_57600, True)
+        self.assert_set(Parameter.PUMP_PULSE, 15)
 
         # Now try to apply params in Streaming
         self.assert_driver_command(ProtocolEvent.START_AUTOSAMPLE, state=ProtocolState.AUTOSAMPLE)
@@ -734,7 +760,7 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase):
 
         # All done.  Verify the startup parameter has been reset
         self.assert_driver_command(ProtocolEvent.STOP_AUTOSAMPLE, state=ProtocolState.COMMAND)
-        self.assert_get(Parameter.USE_BAUD_RATE_57600, False)
+        self.assert_get(Parameter.PUMP_PULSE, 16)
         
 ###############################################################################
 #                            QUALIFICATION TESTS                              #
