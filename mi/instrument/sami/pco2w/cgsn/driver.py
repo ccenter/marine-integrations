@@ -43,14 +43,44 @@ from mi.core.instrument.data_particle import DataParticleKey
 from mi.core.instrument.data_particle import CommonDataParticleType
 from mi.core.instrument.chunker import StringChunker
 
-# Globals
-raw_stream_received = False
-parsed_stream_received = False
-
 # Program Constants.
 NEWLINE = '\r\n'
 NSECONDS_1904_TO_1970 = 2082844800
 TIMEOUT = 10        # Default Timeout.
+
+# Error Look Up Table
+# ASCII Hex errors returned from Insturment.
+sami_error_table=[\
+    "Wrong Number of Arguments", # 0x00 \
+    "Command Not Implemented", \
+    "Invalid Arguments", \
+    "Command Buffer Overflow", \
+    "Invalid Command Enter A return for a list of commands", \
+    "Error in config data", \
+    "> 2000 pages", \
+    "Invalid Configuration", \
+    "Bad Key", # 0x08 \
+    "Flash is Open", \
+    "Flash is Not Open", #0x0A \
+    "Too Many Arguments", \
+    "Too Few Arguments", \
+    "Memory Full", \
+    "Not Valid with Echo Off", \
+    "Unimplemented Extension Index in Configuration",
+    "Flash Data not erased",
+    "Invalid Arguments"]   # 0x11
+ERROR_TABLE_SIZE = 18
+
+# Globals
+raw_stream_received = False
+parsed_stream_received = False
+
+#
+# Create a global Sami Configuration string used to R/W updates.
+# This is the string from the PC02W_Low_Level_SAMI_Use_1.pdf document.
+# Note: 2 bytes removed from text-book example to get required 232 characters.
+sami_configuration_str = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C071020FFA8181C01003810010120256400043338333500020001020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+sami_configuration_valid = False
 
 # This will decode n+1 chars for {n}
 # DEVICE_STATUS_REGEX = r'[:](\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f])+.*?\r\n'
@@ -68,9 +98,9 @@ CONFIG_REGEX    = r'[C](\w[0-9A-Fa-f]{6})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w
 CONFIG_REGEX_NL_MATCHER = re.compile(CONFIG_REGEX_NL)
 CONFIG_REGEX_MATCHER = re.compile(CONFIG_REGEX)
 
-ERROR_REGEX = r'\?\w[0-9A-Fa-f]{1}'
+ERROR_REGEX = r'[?](\w[0-9A-Fa-f]{1})' # (\w[0-9A-Fa-f])'
 ERROR_REGEX_MATCHER = re.compile(ERROR_REGEX)
-
+    
 IMMEDIATE_STATUS_REGEX = r'(\w[0-9A-Fa-f]{1})(w[0-9A-Fa-f]{1})+.*?\r\n'
 IMMEDIATE_STATUS_REGEX_MATCHER = re.compile(IMMEDIATE_STATUS_REGEX)
 
@@ -99,6 +129,7 @@ class DataParticleType(BaseEnum):
     IMMEDIATE_STATUS_PARSED = 'immediate_status_parsed'
     CONFIG_PARSED = 'config_parsed'
     RECORD_PARSED = 'record_parsed'
+    ERROR_PARSED = 'error_parsed'
 
 class InstrumentCmds(BaseEnum):
     """
@@ -140,10 +171,10 @@ class ProtocolEvent(BaseEnum):
     
     ACQUIRE_SAMPLE   = DriverEvent.ACQUIRE_SAMPLE
     ACQUIRE_STATUS   = DriverEvent.ACQUIRE_STATUS
-    ACQUIRE_CONFIGURATION = "PROTOCOL_EVENT_ACQUIRE_CONFIGURATION"
     CLOCK_SYNC       = DriverEvent.CLOCK_SYNC
     
     # Different event because we don't want to expose this as a capability
+    ACQUIRE_CONFIGURATION = "PROTOCOL_EVENT_ACQUIRE_CONFIGURATION"
     SCHEDULED_CLOCK_SYNC = 'PROTOCOL_EVENT_SCHEDULED_CLOCK_SYNC'
 
 class Capability(BaseEnum):
@@ -250,6 +281,37 @@ def get_timestamp_sec():
 ###############################################################################
 # Data Particles
 ################################################################################
+class SamiErrorDataParticleKey(BaseEnum):
+    ERROR_MESSAGE = 'error_code'
+    
+class SamiErrorDataParticle(DataParticle):
+    """
+    This is for raw Sami PCO2W error ? codes.
+    """
+    _data_particle_type = DataParticleType.ERROR_PARSED
+    
+    def _build_parsed_values(self):
+        regex = ERROR_REGEX_MATCHER
+        match = regex.match(self.raw_data)
+        if not match:
+            raise SampleException("No regex match of parsed Error: [%s]" % self.raw_data)
+        result = self._build_particle(match)
+        log.debug("SamiErrorDataParticle = %s" %result)
+        return(result)
+    
+    def _build_particle(self, match):
+        txt = match.group(1)
+        error_code = int(txt,16)
+        # Convert the error code to a string.
+        if( (error_code >= 0) & (error_code < ERROR_TABLE_SIZE)):
+            error_code_str = sami_error_table[error_code]
+        else:
+            error_code_str = "Unknown " + str(hex(error_code))
+            
+        log.debug("Error Code =========== " + str(hex(error_code)) + " " + error_code_str)
+        result = [{DataParticleKey.VALUE_ID: SamiErrorDataParticleKey.ERROR_MESSAGE,
+                   DataParticleKey.VALUE: error_code_str}]
+
 class SamiRecordDataParticleKey(BaseEnum):
     UNIQUE_ID = 'unique_id'
     RECORD_LENGTH = 'record_length'
@@ -362,6 +424,8 @@ class SamiRecordDataParticle(DataParticle):
         return result
     
 class SamiConfigDataParticleKey(BaseEnum):
+    global sami_configuration_str
+    
     PROGRAM_DATE_TIME = 'program_date_time'
     START_TIME_OFFSET = 'start_offset'
     RECORDING_TIME = 'recording_time'
@@ -506,12 +570,15 @@ class SamiConfigDataParticle(DataParticle):
             program_date_time = int(txt,16)
         except Exception, e:
             raise SampleException("ValueError decoding Config DriverID %d: [%s] [%s]" % (i,txt,str(e)))
-
+        log.debug("program_date_time = " + txt)
+        
         txt = match.group(2)
         start_time_offset = int(txt,16)
+        log.debug("start_time_offset = " + txt)
  
         txt = match.group(3)
         recording_time = int(txt,16)
+        log.debug("recording_time = " + txt)
 
         self.contents[SamiConfigDataParticleKey.PROGRAM_DATE_TIME] = program_date_time
         self.contents[SamiConfigDataParticleKey.START_TIME_OFFSET] = start_time_offset
@@ -528,8 +595,20 @@ class SamiConfigDataParticle(DataParticle):
         slot2_independent_schedule = bool(mode & MODE_SLOT2_INDEPENDENT_SCHEDULE)
         slot3_follows_sami_sample  = bool(mode & MODE_SLOT3_FOLLOWS_SAMI_SAMPLE)
         slot3_independent_schedule = bool(mode & MODE_SLOT3_INDEPENDENT_SCHEDULE)
-
+        
+        # Debug
+        '''
+        log.debug("pmi_sample_schedule = " + str(pmi_sample_schedule))
+        log.debug("sami_sample_schedule = " + str(sami_sample_schedule))
+        log.debug("slot1_follows_sami_sample = " + str(slot1_follows_sami_sample))
+        log.debug("slot1_independent_schedule = " + str(slot1_independent_schedule))
+        log.debug("slot2_follows_sami_sample = " + str(slot2_follows_sami_sample))
+        log.debug("slot2_independent_schedule = " + str(slot2_independent_schedule))
+        log.debug("slot3_follows_sami_sample = " + str(slot3_follows_sami_sample))
+        log.debug("slot3_independent_schedule = " + str(slot3_independent_schedule))
+        '''
         # Update Data Dictionary.
+        '''
         self.contents[SamiConfigDataParticleKey.PMI_SAMPLE_SCHEDULE] = pmi_sample_schedule
         self.contents[SamiConfigDataParticleKey.SAMI_SAMPLE_SCHEDULE] = sami_sample_schedule
         self.contents[SamiConfigDataParticleKey.SLOT1_FOLLOWS_SAMI_SCHEDULE] = slot1_follows_sami_sample
@@ -538,7 +617,7 @@ class SamiConfigDataParticle(DataParticle):
         self.contents[SamiConfigDataParticleKey.SLOT2_INDEPENDENT_SCHEDULE]  = slot2_independent_schedule
         self.contents[SamiConfigDataParticleKey.SLOT3_FOLLOWS_SAMI_SCHEDULE] = slot3_follows_sami_sample
         self.contents[SamiConfigDataParticleKey.SLOT3_INDEPENDENT_SCHEDULE]  = slot3_independent_schedule
-
+        '''
         # Loop through the 5 groups of device information.
         timer_interval = None
         driver_id = None
@@ -579,32 +658,33 @@ class SamiConfigDataParticle(DataParticle):
             log.debug(" param_ptr = " + txt)
             idx = idx + 3
             
-            # Timer,Device,Pointer Triples
+            # Put Timer,Device,Pointer Triples into their categories
             if( i == 0):
                 self.contents[SamiConfigDataParticleKey.TIMER_INTERVAL_SAMI] = timer_interval;
                 self.contents[SamiConfigDataParticleKey.DRIVER_ID_SAMI] = driver_id;
                 self.contents[SamiConfigDataParticleKey.PARAM_PTR_SAMI] = param_ptr;
+            elif( i == 1):
+                self.contents[SamiConfigDataParticleKey.TIMER_INTERVAL_1] = timer_interval;
+                self.contents[SamiConfigDataParticleKey.DRIVER_ID_1] = driver_id;
+                self.contents[SamiConfigDataParticleKey.PARAM_PTR_1] = param_ptr;
+            elif( i == 2):
+                self.contents[SamiConfigDataParticleKey.TIMER_INTERVAL_2] = timer_interval;
+                self.contents[SamiConfigDataParticleKey.DRIVER_ID_2] = driver_id;
+                self.contents[SamiConfigDataParticleKey.PARAM_PTR_2] = param_ptr;
+            elif( i == 3):
+                self.contents[SamiConfigDataParticleKey.TIMER_INTERVAL_3] = timer_interval;
+                self.contents[SamiConfigDataParticleKey.DRIVER_ID_3] = driver_id;
+                self.contents[SamiConfigDataParticleKey.PARAM_PTR_3] = param_ptr;
+            elif( i == 4):
+                self.contents[SamiConfigDataParticleKey.TIMER_INTERVAL_PRESTART] = timer_interval;
+                self.contents[SamiConfigDataParticleKey.DRIVER_ID_PRESTART] = driver_id;
+                self.contents[SamiConfigDataParticleKey.PARAM_PTR_PRESTART] = param_ptr;                
         # end for
-                
-        """
-        TIMER_INTERVAL_1 = 'timer_interval_1'
-        DRIVER_ID_1 = 'driver_id_1'
-        PARAM_PTR_1 = 'param_ptr_1'
-        TIMER_INTERVAL_2 = 'timer_interval_2'
-        DRIVER_ID_2 = 'driver_id_2'
-        PARAM_PTR_2 = 'param_ptr_2'
-        TIMER_INTERVAL_3 = 'timer_interval_3'
-        DRIVER_ID_3 = 'driver_id_3'
-        PARAM_PTR_3 = 'param_ptr_3'
-        TIMER_INTERVAL_PRESTART = 'timer_interval_prestart'
-        DRIVER_ID_PRESTART = 'driver_id_prestart'
-        PARAM_PTR_PRESTART = 'param_ptr_prestart'
-        """
     
         # The next byte is the Global Configuration Switches.
         txt = match.group(idx)
         idx = idx + 1
-        cfg_reg = int(txt,16)
+        cfg_reg = int(txt,16) 
         use_baud_rate_57600    = bool(cfg_reg & CFG_GLOBAL_BAUD_RATE_57600)
         send_record_type_early = bool(cfg_reg & CFG_GLOBAL_SEND_RECORD_TYPE_EARLY)
         send_live_records      = bool(cfg_reg & CFG_GLOBAL_SEND_LIVE_RECORDS)
@@ -653,6 +733,7 @@ class SamiConfigDataParticle(DataParticle):
         cycle_data = int(txt,16)
     
         # PCO2 Pump Driver
+        self.contents[SamiConfigDataParticleKey.PROGRAM_DATE_TIME] = program_date_time
         self.contents[SamiConfigDataParticleKey.PUMP_PULSE] = pump_pulse
         self.contents[SamiConfigDataParticleKey.PUMP_ON_TO_MEAURSURE] = pump_on_to_measure
         self.contents[SamiConfigDataParticleKey.SAMPLES_PER_MEASURE] = samples_per_measure
@@ -674,27 +755,30 @@ class SamiConfigDataParticle(DataParticle):
         log.debug("num_blank_cycles = " + str(hex(num_blank_cycles)))
         log.debug("flush_pump_interval = " + str(hex(flush_pump_interval)))
         log.debug("bit_switch = " + str(hex(bit_switch)))                   
+        log.debug("blank_flush_on_start_enable = " + str(blank_flush_on_start_enable))
+        log.debug("pump_pulse_post_measure = " + str(pump_pulse_post_measure))
         log.debug("cycle_data = " + str(hex(cycle_data)))
         '''                      
 
         # Globalize these parameters.
-        sami_cache_dict[Parameter.PUMP_PULSE] = pump_pulse;
-        sami_cache_dict[Parameter.PUMP_ON_TO_MEASURE] = pump_on_to_measure;
-        sami_cache_dict[Parameter.NUM_SAMPLES_PER_MEASURE] = samples_per_measure;
-        sami_cache_dict[Parameter.NUM_CYCLES_BETWEEN_BLANKS] = cycles_between_blanks;
-        sami_cache_dict[Parameter.NUM_REAGENT_CYCLES] = num_reagent_cycles;
-        sami_cache_dict[Parameter.NUM_BLANK_CYCLES] = num_blank_cycles;
-        sami_cache_dict[Parameter.FLUSH_PUMP_INTERVAL_SEC] = flush_pump_interval;
+        sami_cache_dict[Parameter.DEVICE_DATE_TIME] = program_date_time
+        sami_cache_dict[Parameter.PUMP_PULSE] = pump_pulse
+        sami_cache_dict[Parameter.PUMP_ON_TO_MEASURE] = pump_on_to_measure
+        sami_cache_dict[Parameter.NUM_SAMPLES_PER_MEASURE] = samples_per_measure
+        sami_cache_dict[Parameter.NUM_CYCLES_BETWEEN_BLANKS] = cycles_between_blanks
+        sami_cache_dict[Parameter.NUM_REAGENT_CYCLES] = num_reagent_cycles
+        sami_cache_dict[Parameter.NUM_BLANK_CYCLES] = num_blank_cycles
+        sami_cache_dict[Parameter.FLUSH_PUMP_INTERVAL_SEC] = flush_pump_interval
         sami_cache_dict[Parameter.STARTUP_BLANK_FLUSH_ENABLE] = blank_flush_on_start_enable
-        sami_cache_dict[Parameter.PUMP_PULSE_POST_MEASURE_ENABLE] = pump_pulse_post_measure;
-        sami_cache_dict[Parameter.NUM_EXTRA_PUMP_CYCLES] = cycle_data;
+        sami_cache_dict[Parameter.PUMP_PULSE_POST_MEASURE_ENABLE] = pump_pulse_post_measure
+        sami_cache_dict[Parameter.NUM_EXTRA_PUMP_CYCLES] = cycle_data
         
         # Serial settings is next match.        
         txt = match.group(idx)
         idx = idx + 1
         serial_settings = txt
-        
         """
+        log.debug("serial_settings = " + txt)
         # These parameters are not currently used.
         log.debug("duration1: " + m0.group(idx) )
         idx = idx + 1    
@@ -902,7 +986,11 @@ class SamiStatusDataParticle(DataParticle):
             # Decode Time Stamp since Launch
             txt = match.group(1)
             time_offset = int(txt,16)
-            log.debug("time_offset = " + str(hex(time_offset)))
+            log.debug("time_offset = " + str(time_offset) + " " + str(hex(time_offset)))
+            # All F's indicates no valid configuration file defined.
+            if( time_offset == 0xFFFFFFFF ):
+                sami_configuration_valid = False
+                log.debug("Invalid Time Offset Found! " + str(hex(time_offset)))
             
         except ValueError:
             raise SampleException("ValueError while decoding data: [%s]" %
@@ -1111,7 +1199,8 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         sieve_matchers = [RECORD_TYPE4_REGEX_MATCHER,
                           DEVICE_STATUS_REGEX_MATCHER,
-                          CONFIG_REGEX_MATCHER]
+                          CONFIG_REGEX_MATCHER,
+                          ERROR_REGEX_MATCHER]
 
         return_list = []
 
@@ -1154,56 +1243,48 @@ class Protocol(CommandResponseInstrumentProtocol):
         self._param_dict.add(Parameter.PUMP_PULSE,
             r'^(.{%s})(.{2}).*' % str(param_index),   # Fixed offset.
             lambda match : self._string_to_int(match.group(2)),
-            lambda x : self._int8_to_string(value=x,pos=param_index),
+            lambda x : self._update_configuration_byte(value=x,pos=param_index),
             default_value = 16)
-        
-#        self._param_dict.add_paramdictval( 
-#            FunctionParamDictVal( Parameter.PUMP_PULSE,
-#                                  self._decode_bit_0,
-#                                  lambda x : str(x),
-#                                  direct_access=True,
-#                                  startup_param=True,
-#                                  value=1,
-#                                  visibility=ParameterDictVisibility.READ_WRITE)
-#                                )
-        
+       
         self._param_dict.add(Parameter.PUMP_ON_TO_MEASURE,
             r'^(.{%s})(.{2}).*' % str(param_index+2),   # Fixed offset.
             lambda match : self._string_to_int(match.group(2)),
-            lambda x : self._int8_to_string(value=x,pos=param_index+2),                          # Output, note needs to be 7
+            lambda x : self._update_configuration_byte(value=x,pos=param_index+2),                          # Output, note needs to be 7
             default_value = 32)
         
         self._param_dict.add(Parameter.NUM_SAMPLES_PER_MEASURE,
             r'^(.{%s})(.{2}).*' % str(param_index+4),   # Fixed offset.
             lambda match : self._string_to_int(match.group(2)),
-            lambda x : self._int8_to_string(value=x,pos=param_index+4),                          # Output, note needs to be 7
+            lambda x : self._update_configuration_byte(value=x,pos=param_index+4),                          # Output, note needs to be 7
             default_value = 255)
         
         self._param_dict.add(Parameter.NUM_CYCLES_BETWEEN_BLANKS,
             r'^(.{%s})(.{2}).*' % str(param_index+6),   # Fixed offset.
             lambda match : self._string_to_int(match.group(2)),
-            lambda x : self._int8_to_string(value=x,pos=param_index+6),                          # Output, note needs to be 7
+            lambda x : self._update_configuration_byte(value=x,pos=param_index+6),                          # Output, note needs to be 7
             default_value = 168)
                    
         self._param_dict.add(Parameter.NUM_REAGENT_CYCLES,
             r'^(.{%s})(.{2}).*' % str(param_index+8),   # Fixed offset.
             lambda match : self._string_to_int(match.group(2)),
-            lambda x : self._int8_to_string(value=x,pos=param_index+8),                          # Output, note needs to be 7
+            lambda x : self._update_configuration_byte(value=x,pos=param_index+8),                          # Output, note needs to be 7
             default_value = 24)
                    
         self._param_dict.add(Parameter.NUM_BLANK_CYCLES,
             r'^(.{%s})(.{2}).*' % str(param_index+10),   # Fixed offset.
             lambda match : self._string_to_int(match.group(2)),
-            lambda x : self._int8_to_string(value=x,pos=param_index+10),                          # Output, note needs to be 7
+            lambda x : self._update_configuration_byte(value=x,pos=param_index+10),                          # Output, note needs to be 7
             default_value = 28)
 
         self._param_dict.add(Parameter.FLUSH_PUMP_INTERVAL_SEC,
             r'^(.{%s})(.{2}).*' % str(param_index+12),   # Fixed offset.
             lambda match : self._string_to_int(match.group(2)),
-            lambda x : self._int8_to_string(value=x,pos=param_index+12),                          # Output, note needs to be 7
+            lambda x : self._update_configuration_byte(value=x,pos=param_index+12),                          # Output, note needs to be 7
             default_value = 1)
 
         """
+        This was older software used to decode the parameters using a local cache rather
+        than a local configuration string.
         self._param_dict.add(Parameter.STARTUP_BLANK_FLUSH_ENABLE,
             CONFIG_REGEX,
             lambda st : sami_cache_dict[Parameter.STARTUP_BLANK_FLUSH_ENABLE],
@@ -1221,18 +1302,19 @@ class Protocol(CommandResponseInstrumentProtocol):
                 
         self._param_dict.add_paramdictval( 
             FunctionParamDictVal( Parameter.STARTUP_BLANK_FLUSH_ENABLE,
-                                  self._decode_switch_bit_0,
-                                  lambda x : str(x),
+                                  lambda s : self._decode_switch_bit(input=s,bit_offset=0,pos=param_index+14),
+                                  lambda x : self._update_configuration_bit(value=x,bit_offset=0,pos=param_index+14),
                                   direct_access=True,
                                   startup_param=False,
                                   value=True,
                                   visibility=ParameterDictVisibility.READ_WRITE )
                                          )
         
+        # Note bit values is inverted for this selection (
         self._param_dict.add_paramdictval(
             FunctionParamDictVal( Parameter.PUMP_PULSE_POST_MEASURE_ENABLE,
-                                  self._decode_switch_bit_1,
-                                  lambda x : str(x),
+                                  lambda s : self._decode_switch_bit(input=s,bit_offset=1,pos=param_index+14),
+                                  lambda x : self._update_configuration_bit(value=(x==0),bit_offset=1, pos=param_index+14),
                                   direct_access=True,
                                   startup_param=False,
                                   value=False,
@@ -1242,7 +1324,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         self._param_dict.add(Parameter.NUM_EXTRA_PUMP_CYCLES,
             r'^(.{%s})(.{2}).*' % str(param_index+16),   # Fixed offset.
             lambda match : self._string_to_int(match.group(2)),
-            lambda x : self._int8_to_string(value=x,pos=param_index+16),                          # Output, note needs to be 7
+            lambda x : self._update_configuration_byte(value=x,pos=param_index+16),
             default_value = 56)
         
         pd = self._param_dict.get_config()
@@ -1260,6 +1342,8 @@ class Protocol(CommandResponseInstrumentProtocol):
             log.debug("_got_chunk of Status = Passed good")
         elif(self._extract_sample(SamiConfigDataParticle, CONFIG_REGEX_MATCHER, chunk, timestamp)):
             log.debug("_got_chunk of Config = Passed good")
+        elif(self._extract_sample(SamiErrorDataParticle, ERROR_REGEX_MATCHER, chunk, timestamp)):
+            log.debug("_got_chunk of Error = Passed good")
         else:
             log.debug("_got_chunk = Failed")
 
@@ -1327,12 +1411,20 @@ class Protocol(CommandResponseInstrumentProtocol):
         log.debug("Testing _handler_unknown_discover")
         next_state = None
         next_agent_state = None
-                   
-        # This is where we will figure out what state we are in.
-        self._sami_do_cmd_device_status()
         
+        # Default next state.           
         next_state = ProtocolState.COMMAND
         next_agent_state = ResourceAgentState.IDLE
+
+        # Make sure automatic-status update is off!
+        self._do_cmd_resp(InstrumentCmds.AUTO_STATUS_OFF,
+                          expected_prompt = Prompt.COMMAND, *args, **kwargs)
+        
+        # This is where we will figure out what state we are in.
+        if( self._sami_do_cmd_device_status() == True ):
+            if( self._is_sampling_active() == True ):
+                next_state = ProtocolState.AUTOSAMPLE
+                next_agent_state = ResourceAgentState.STREAMING
                 
         return ( next_state, next_agent_state )
 
@@ -1809,6 +1901,10 @@ class Protocol(CommandResponseInstrumentProtocol):
         log.debug("external_device_fault = " + str(external_device_fault))
         log.debug("flash_erased = " + str(flash_erased))
         log.debug("power_on_invalid = " + str(power_on_invalid))
+
+#        # Jump in and update the parameter dictionary here!        
+#        param = Parameter.PUMP_ON_TO_MEASURE;
+#        param['value'] = pump_on;
     
     def _sami_update_device_status(self, s):
         r = False
@@ -2120,8 +2216,8 @@ class Protocol(CommandResponseInstrumentProtocol):
         pass
     
     def _update_params(self, *args, **kwargs):
-        """Fetch the parameters from the device, and update the param dict.
-        
+        """
+        Fetch the parameters from the device, and update the param dict.
         @param args Unused
         @param kwargs Takes timeout value
         @throws InstrumentProtocolException
@@ -2130,7 +2226,11 @@ class Protocol(CommandResponseInstrumentProtocol):
         log.debug("Updating parameter dict")
         # Get all the key values.
         old_config = self._param_dict.get_config()
+#        print("old cfg size = " + str(len(old_config.keys)))
            
+#            print "the key name is" + key + "and its value is" + old_config[key]
+        print( "...........Key dump")
+            
         # Issue display commands and parse results.
         if( self._sami_do_cmd_config() == False ):
             log.debug(" Failed mission to read configuration. ")
@@ -2150,23 +2250,38 @@ class Protocol(CommandResponseInstrumentProtocol):
     # Static helpers to format set commands.
     ########################################################################
     @staticmethod
-    def _decode_switch_bit_0(input):
-        log.debug("decode_switch_bit_0 - Invert logic " + input)
-        base_index = 70 + 14
-        s = input[base_index:(base_index+2)]
-        val = int(s,16)
-        r = (bool(val & 0x1) == False)
-        return( r)
-    
+    def _hex_to_ascii(d):
+        '''
+        Convert numeric to an ASCII Hex character
+        @param d: Hex digit (0-9,A-F)
+        '''
+        c = '0'
+        if( d <= 9 ):
+            c = d + ord('0');
+        else:
+            c = d - 10 + ord('A');
+        return(chr(c));
+
     @staticmethod
-    def _decode_switch_bit_1(input):
+    def _decode_switch_bit(input, bit_offset, pos):
+        r = False
         log.debug("decode_switch_bit_0 - Invert logic " + input)
-        base_index = 70 + 14
-        s = input[base_index:(base_index+2)]
-        val = int(s,16)
-        r = bool(val & 0x2)
+        if( not input ):
+            log.debug("not input found")
+        elif( input == "" ):
+            log.debug("no string found!")
+        else:
+            len_input = len(input)
+            if( (pos+2) >= len_input ):
+                log.debug("ERRRRRRRRRRRRRRRRR Invalid string length %s/%s" %(str(pos),str(len_input)) )
+            else:
+                log.debug("input length = " + str(len_input))
+                s = input[pos:(pos+2)]
+                val = int(s,16)
+                iBitValue = (1 << bit_offset)
+                r = bool(val & iBitValue)
         return( r)
-    
+
     @staticmethod
     def _string_to_string(v):
         return v
@@ -2187,22 +2302,79 @@ class Protocol(CommandResponseInstrumentProtocol):
         return v
 
     # Tools for configuration.
+    def _replace_string_chars(s1, pos, s2):
+        """
+        Replace characters in a string at the specified string position (index).
+        @param s1: Input string for replacement.
+        @param pos: Input string index of replace.
+        @param s2: - Replacement string.
+        @return: New resulting string.
+        """
+        len2 = len(s2)
+        if( len2 > 0 ):
+            s1 = s1[0:pos] + s2 + s1[pos+len2:]
+        return(s1)
+    
+    @staticmethod
+    def _update_configuration_bit(value, bit_offset, pos):
+        """
+        Update the configuration string with a 1-bit value at the desired string index
+        @param s1: string for bit-field update
+        @param value: [0,1] 1-bit value to insert into string 
+        @param bit_offset: bit offset into nibble (0-3) 3210
+        @param pos: Configuration String position of update.
+        @return: 1-char string ???
+        """
+        global sami_configuration_str
+        # Get the old Nibble (4-bit value) to change
+        old_nib_txt = sami_configuration_str[pos]
+        new_nib = int(old_nib_txt,16)
+        # Compute the bit to set in the nibble.
+        ibit = 1 << bit_offset
+        if( value == 0x0 ):
+            new_nib &= ~ibit  # Bit Clear
+        else: # value == 0x1
+            new_nib |= ibit
+        # Compute bits back to nibble character for configuration string.
+        msg = hex_to_ascii(new_nib)
+        sami_configuration_str = sami_configuration_str[0:pos] + msg + sami_configuration_str[pos+1:]
+        return(msg)
+    
+    @staticmethod
+    def _update_configuration_byte(value, pos):
+        """
+        Update the configuraiton string with a value at the desired string index
+        @param value: 8-bit value to insert into string
+        @param pos: Configuration String position (index) to insert updated value.
+        @return: 2-byte string
+        """
+        global sami_configuration_str
+        msg = '{:02x}'.format(value)
+        print("sami_string is was " + sami_configuration_str)
+        sami_configuration_str = sami_configuration_str[0:pos] + msg + sami_configuration_str[pos+2:]
+#        _replace_string_chars(sami_configuration_str, pos, msg)
+        print("sami_string is now " + sami_configuration_str)
+        return(msg)
+    
     @staticmethod
     def _int8_to_string(value, pos=0):
         """
         Convert 8-bit value to a 2-character string at position (pos)
-        @param timeout: how long to wait for a prompt
+        @param value: 8-bit value to convert to a 2-character hex string.
+        @param pos: Position in Sami Configuration String for replacement.
         @return: True if successful
         @raise: InstrumentTimeoutException if prompt isn't seen
         @raise: InstrumentProtocolException failed to stop logging
         """
+        global sami_configuration_str
+        # Verify input
         if not isinstance(value,int):
             raise InstrumentParameterException('Value %s is not an int-8' % str(value))
         if value > 255:
             raise InstrumentParameterException('Value %s is not an int-8' % str(value))
         else:
             msg = '{:02x}'.format(value)
-            sami_configuration_str[pos:pos+2] = msg
+            _replace_string_chars(sami_configuration_str, pos, msg)
             print("sami_string is now " + sami_configuration_str)
             return(msg)
 
