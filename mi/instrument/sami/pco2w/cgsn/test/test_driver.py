@@ -76,8 +76,8 @@ from mi.instrument.sami.pco2w.cgsn.driver import get_timestamp_delayed_sec  # Mo
 # Data Particles
 from mi.instrument.sami.pco2w.cgsn.driver import SamiImmediateStatusDataParticle
 from mi.instrument.sami.pco2w.cgsn.driver import SamiImmediateStatusDataParticleKey
-from mi.instrument.sami.pco2w.cgsn.driver import SamiRecordDataParticle
-from mi.instrument.sami.pco2w.cgsn.driver import SamiRecordDataParticleKey
+from mi.instrument.sami.pco2w.cgsn.driver import SamiDataRecordParticle
+from mi.instrument.sami.pco2w.cgsn.driver import SamiDataRecordParticleKey
 from mi.instrument.sami.pco2w.cgsn.driver import SamiStatusDataParticle
 from mi.instrument.sami.pco2w.cgsn.driver import SamiStatusDataParticleKey
 from mi.instrument.sami.pco2w.cgsn.driver import SamiConfigDataParticle
@@ -101,8 +101,10 @@ STARTUP = ParameterTestConfigKey.STARTUP
 SAMPLE_IMMEDIATE_STATUS_DATA = "10"
 SAMPLE_ERROR_DATA = "?03" + NEWLINE
 # This records is from the PCO2W_Record_Format.pdf file.
-SAMPLE_RECORD_DATA_1 = "*5B2704C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B"
-SAMPLE_RECORD_DATA_2 =  "*7E2705CBACEE7F007D007D0B2A00BF080500E00187034A008200790B2D00BE080600DE0C1406C98C"
+SAMPLE_DATA_RECORD_1  = "*5B2704C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B"
+SAMPLE_DATA_RECORD_2  = "*7E2705CBACEE7F007D007D0B2A00BF080500E00187034A008200790B2D00BE080600DE0C1406C98C"
+SAMPLE_CONTROL_RECORD = "*5B2780C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B"
+
 # Regular Status.
 #SAMPLE_DEVICE_STATUS_DATA = ":000029ED40"  + NEWLINE
 SAMPLE_DEVICE_STATUS_DATA = ":003F91BE00000000" # :003F91BE0000000000000000000000F7" + NEWLINE
@@ -194,14 +196,22 @@ class DataParticleMixin(DriverTestMixin):
 
     # Test results that get decoded from the string sent to the chunker.
     _data_record_parameters = {   
-        SamiRecordDataParticleKey.UNIQUE_ID:        { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 91, REQUIRED: True},
-        SamiRecordDataParticleKey.RECORD_LENGTH:    { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 39, REQUIRED: True},
-        SamiRecordDataParticleKey.RECORD_TYPE:      { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 4,  REQUIRED: True},
-        SamiRecordDataParticleKey.RECORD_TIME:      { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0xC8EF9FC9, REQUIRED: True},
-        SamiRecordDataParticleKey.VOLTAGE_BATTERY:  { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 205, REQUIRED: True },
-        SamiRecordDataParticleKey.THERMISTER_RAW:   { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 255, REQUIRED: True },
-        SamiRecordDataParticleKey.CHECKSUM:         { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x3B, REQUIRED: True},
-        SamiRecordDataParticleKey.LIGHT_MEASUREMENT:{ TYPE: list,READONLY: False, DA: False, }
+        SamiDataRecordParticleKey.UNIQUE_ID:        { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 91, REQUIRED: True},
+        SamiDataRecordParticleKey.RECORD_LENGTH:    { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 39, REQUIRED: True},
+        SamiDataRecordParticleKey.RECORD_TYPE:      { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 4,  REQUIRED: True},
+        SamiDataRecordParticleKey.RECORD_TIME:      { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0xC8EF9FC9, REQUIRED: True},
+        SamiDataRecordParticleKey.VOLTAGE_BATTERY:  { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 205, REQUIRED: True },
+        SamiDataRecordParticleKey.THERMISTER_RAW:   { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 255, REQUIRED: True },
+        SamiDataRecordParticleKey.CHECKSUM:         { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x3B, REQUIRED: True},
+        SamiDataRecordParticleKey.LIGHT_MEASUREMENT:{ TYPE: list,READONLY: False, DA: False }
+    }
+    
+    _control_record_parameters = {   
+        SamiDataRecordParticleKey.UNIQUE_ID:        { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 91, REQUIRED: True},
+        SamiDataRecordParticleKey.RECORD_LENGTH:    { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 39, REQUIRED: True},
+        SamiDataRecordParticleKey.RECORD_TYPE:      { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x80,  REQUIRED: True},
+        SamiDataRecordParticleKey.RECORD_TIME:      { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0xC8EF9FC9, REQUIRED: True},
+        SamiDataRecordParticleKey.CHECKSUM:         { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x3B, REQUIRED: True},
     }
    
     # Test results that get decoded from the string sent to the chunker.
@@ -298,7 +308,7 @@ class DataParticleMixin(DriverTestMixin):
         correct
         @param data_particle: Data particle of unkown type produced by the driver
         '''
-        if (isinstance(data_particle, SamiRecordDataParticle)):
+        if (isinstance(data_particle, SamiDataRecordParticle)):
             self.assert_particle_data_record(data_particle)
             
         elif (isinstance(data_particle, SamiStatusDataParticle)):
@@ -336,13 +346,13 @@ class DataParticleMixin(DriverTestMixin):
         self.assert_data_particle_header(data_particle, DataParticleType.IMMEDIATE_STATUS_PARSED)
         self.assert_data_particle_parameters(data_particle, self._immediate_status_parameters, verify_values)
         
-    def assert_particle_record_data(self, data_particle, verify_values = False):
+    def assert_particle_data_record(self, data_particle, verify_values = False):
         '''
         Verify a take sample data particle
-        @param data_particle:  SamiRecordDataParticle data particle
+        @param data_particle:  SamiDataRecordParticle data particle
         @param verify_values:  bool, should we verify parameter values
         '''
-        self.assert_data_particle_header(data_particle, DataParticleType.RECORD_PARSED)
+        self.assert_data_particle_header(data_particle, DataParticleType.DATA_RECORD_PARSED)
         self.assert_data_particle_parameters(data_particle, self._data_record_parameters, verify_values)
 
 ###############################################################################
@@ -412,7 +422,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         """
         chunker = StringChunker(Protocol.sieve_function)
 
-        test_data = SAMPLE_RECORD_DATA_1      
+        test_data = SAMPLE_DATA_RECORD_1      
         self.assert_chunker_sample(chunker, test_data)
         self.assert_chunker_sample_with_noise(chunker, test_data)
         self.assert_chunker_fragmented_sample(chunker, test_data)
@@ -441,7 +451,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
 
         # Start validating data particles
         self.assert_particle_published(driver, SAMPLE_DEVICE_STATUS_DATA, self.assert_particle_device_status, True)  # Regular Status
-        self.assert_particle_published(driver, SAMPLE_RECORD_DATA_1, self.assert_particle_record_data, True)         # Data Record.
+        self.assert_particle_published(driver, SAMPLE_DATA_RECORD_1, self.assert_particle_data_record, True)          # Data Record.
         self.assert_particle_published(driver, SAMPLE_CONFIG_DATA_1, self.assert_particle_configuration, True)
         
         # Note: The Immediate Status Particle is a command response!
@@ -522,7 +532,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         
         self.reset_test_vars()
         packet = PortAgentPacket()
-        packet.attach_data(SAMPLE_RECORD_DATA_1) 
+        packet.attach_data(SAMPLE_DATA_RECORD_1) 
         temp_driver._protocol.got_data(packet)        
         self.assertFalse(self.raw_stream_received)
         self.assertFalse(self.parsed_stream_received)
