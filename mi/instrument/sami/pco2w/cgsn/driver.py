@@ -193,9 +193,9 @@ DEVICE_STATUS_REGEX = r'[:](\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f])(\
 DEVICE_STATUS_REGEX_MATCHER = re.compile(DEVICE_STATUS_REGEX)
 
 # Record Type4 or 5 are 39 bytes (78char)
-RECORD_TYPE4_REGEX = r'[*](\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{57})'
-RECORD_TYPE4_REGEX_MATCHER = re.compile(RECORD_TYPE4_REGEX)
-
+DATA_RECORD_REGEX = r'[*](\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{57})'
+DATA_RECORD_REGEX_MATCHER = re.compile(DATA_RECORD_REGEX)
+    
 # Note: CA is valid for current time.
 CONFIG_REGEX = r'[C](\w[0-9A-Fa-f]{6})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{25})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{99})'
 CONFIG_REGEX_MATCHER = re.compile(CONFIG_REGEX)
@@ -205,12 +205,6 @@ ERROR_REGEX_MATCHER = re.compile(ERROR_REGEX)
     
 IMMEDIATE_STATUS_REGEX = r'(\w[0-9A-Fa-f]{1})(w[0-9A-Fa-f]{1})+.*?\r\n'
 IMMEDIATE_STATUS_REGEX_MATCHER = re.compile(IMMEDIATE_STATUS_REGEX)
-
-# Record information received from instrument may be data or control.
-RECORD_CTRL_LAUNCH = 0x80  # Launch - The program started executing, possibly waiting for measurement
-RECORD_CTRL_START  = 0x81  # Start - The measurement sequence has started.
-RECORD_CTRL_SHUTDOWN = 0x83 # Good Shutdown.
-RECORD_CTRL_RTS_ENABLE = 0x85  # RTS Handshake is on.
 
 ###
 #    Driver Constant Definitions
@@ -225,7 +219,8 @@ class DataParticleType(BaseEnum):
     DEVICE_STATUS_PARSED = 'device_status_parsed'
     IMMEDIATE_STATUS_PARSED = 'immediate_status_parsed'
     CONFIG_PARSED = 'config_parsed'
-    RECORD_PARSED = 'record_parsed'
+    DATA_RECORD_PARSED = 'data_record_parsed'
+    CONTROL_RECORD_PARSED = 'control_record_parsed'
     ERROR_PARSED = 'error_parsed'
 
 class InstrumentCmds(BaseEnum):
@@ -361,7 +356,7 @@ def get_timestamp_sec():
 ###############################################################################
 # Data Particles
 ################################################################################
-class SamiRecordDataParticleKey(BaseEnum):
+class SamiDataRecordParticleKey(BaseEnum):
     UNIQUE_ID = 'unique_id'
     RECORD_LENGTH = 'record_length'
     RECORD_TYPE = 'record_type'
@@ -371,23 +366,30 @@ class SamiRecordDataParticleKey(BaseEnum):
     THERMISTER_RAW = 'thermister_raw'
     CHECKSUM = 'checksum'
 
-class SamiRecordDataParticle(DataParticle):
+class SamiDataRecordParticle(DataParticle):
     """
     This is for raw Sami PCO2W samples.
 	Routines for parsing raw data into a data particle structure. Override
     the building of values, and the rest should come along for free.
     """
     # Record types are Control or Data.
+    # Data Records: 0x0 - 0x7F
     _RECORD_DATA_PH    = 0xA
     _RECORD_DATA_SAMI_CO2 = 0x4
     _RECORD_DATA_BLANK = 0x5
 
+    # Control Records: 0x80 - 0xFE 
+    _RECORD_CTRL_LAUNCH = 0x80  # Launch - The program started executing, possibly waiting for measurement
+    _RECORD_CTRL_START  = 0x81  # Start - The measurement sequence has started.
+    _RECORD_CTRL_SHUTDOWN = 0x83 # Good Shutdown.
+    _RECORD_CTRL_RTS_ENABLE = 0x85  # RTS Handshake is on.
+
     # Record information received from instrument may be data or control.
-    _data_particle_type = DataParticleType.RECORD_PARSED
+    _data_particle_type = DataParticleType.DATA_RECORD_PARSED
 
     def _build_parsed_values(self):
         # Restore the first character we removed for recognition.
-        regex1 = RECORD_TYPE4_REGEX_MATCHER
+        regex1 = DATA_RECORD_REGEX_MATCHER
         
         match = regex1.match(self.raw_data)
         if not match:
@@ -408,6 +410,7 @@ class SamiRecordDataParticle(DataParticle):
         thermister_raw = None
         checksum = None
 
+        # Start: Common record information.
         # Decode Time Stamp since Launch       
         txt = match.group(1)
         try:
@@ -439,45 +442,85 @@ class SamiRecordDataParticle(DataParticle):
         log.debug("record type = " + str(record_type))
         log.debug("record time = " + str(record_time) + " " + txt + " " + SamiConfiguration.make_date_str(record_time))
         '''
-        
-        # Record Type #4,#5 have a length of 39 bytes, time & trailing checksum.
-        if( (record_type == self._RECORD_DATA_PH) | \
-            (record_type == self._RECORD_DATA_SAMI_CO2) | \
-            (record_type == self._RECORD_DATA_BLANK) ):
-            
-            # Compute now many 8-bit data bytes we have.
-            data_length = record_length
-            data_length = data_length - 6  # Adjust for type, 4-bytes of time.
-            data_length = data_length - 5  # Adjust for battery, thermister, cs
-            num_measurements = data_length / 2  # 2-bytes per record.
-            # log.debug("num_measurments = " + str(num_measurements))
-        
-            # Start extracting measurements from this string position
-            idx = 15
-            for i in range(0,num_measurements):
-                txt = self.raw_data[idx:idx+4]
-                try:
-                    val = int(txt, 16)
-                except Exception, e:
-                    raise SampleException("Sami Record ValueError decoding value %d,%s: [%s]" % (i,txt,str(e)))
-                # log.debug("light_measurement = " + txt)                
-                pt_light_measurements.append(val)
-                idx = idx + 4;            
+        # End: Common Record Information.
                 
-            txt = self.raw_data[idx:idx+3]
-            try:
-                voltage_battery = int(txt, 16)
-            except Exception, e:
-                raise SampleException("Sami Record ValueError decoding voltage_battery %s: [%s]" % (txt,str(e)))
+        # Record Type #4,#5 have a length of 39 bytes, time & trailing checksum.
+        if( record_type == 0xFF ):
+            # Data Record - Generic External (0-5V Device)
+            data_length = record_length;
+            data_length = data_length - 6
+            txt = s[idx:idx+4]        
+            extern_voltage_battery = int(txt,16)
             idx = idx + 4
+            # Checksum follows.
             
-            txt = self.raw_data[idx:idx+3]
-            try:
-                thermister_raw = int(txt, 16) 
-            except Exception, e:
-                raise SampleException("Sami Record ValueError decoding thermister_raw %s: [%s]" % (txt,str(e)))
-            idx = idx + 4
-    
+        elif( (record_type >= 0x00) & (record_type < 0x7F)):
+            # This is a data record!
+
+            if( (record_type == 0x10) | \
+                (record_type == 0x20) | \
+                (record_type == 0x30) ):
+                # External Devices 1,2,3
+                log.debug("External Device Power") 
+                data_length = record_length;
+                data_length = data_length - 6
+                txt = s[idx:idx+4]        
+                extern_voltage_battery = int(txt,16)
+                idx = idx + 4
+            
+            elif( (record_type == self._RECORD_DATA_PH) | \
+                  (record_type == self._RECORD_DATA_SAMI_CO2) | \
+                  (record_type == self._RECORD_DATA_BLANK) ):
+                
+                # Compute now many 8-bit data bytes we have.
+                data_length = record_length
+                data_length = data_length - 6  # Adjust for type, 4-bytes of time.
+                data_length = data_length - 5  # Adjust for battery, thermister, cs
+                num_measurements = data_length / 2  # 2-bytes per record.
+                # log.debug("num_measurments = " + str(num_measurements))
+            
+                # Start extracting measurements from this string position
+                idx = 15
+                for i in range(0,num_measurements):
+                    txt = self.raw_data[idx:idx+4]
+                    try:
+                        val = int(txt, 16)
+                    except Exception, e:
+                        raise SampleException("Sami Record ValueError decoding value %d,%s: [%s]" % (i,txt,str(e)))
+                    # log.debug("light_measurement = " + txt)                
+                    pt_light_measurements.append(val)
+                    idx = idx + 4;            
+                    
+                txt = self.raw_data[idx:idx+3]
+                try:
+                    voltage_battery = int(txt, 16)
+                except Exception, e:
+                    raise SampleException("Sami Record ValueError decoding voltage_battery %s: [%s]" % (txt,str(e)))
+                idx = idx + 4
+                
+                txt = self.raw_data[idx:idx+3]
+                try:
+                    thermister_raw = int(txt, 16) 
+                except Exception, e:
+                    raise SampleException("Sami Record ValueError decoding thermister_raw %s: [%s]" % (txt,str(e)))
+                idx = idx + 4
+                
+            elif( (record_type >= 0x80) & (record_type < 0xFF) ):
+                # This is a control record
+                log.debug("control record found " + str(record_type))
+                
+                if( record_type == self._RECORD_CTRL_LAUNCH):
+                    log.debug("start: " + str(record_type))
+                    
+                elif( record_type == self._RECORD_CTRL_START ):
+                    log.debug("Control Record Start")
+                    
+                elif( record_type == self._RECORD_CTRL_SHUTDOWN ):
+                    log.debug("Good Shutdown")
+                    
+                elif( record_type == self._RECORD_CTRL_RTS_ENABLE ):
+                    log.debug("Handshake Turned on (RTS high)")
+                
             txt = self.raw_data[idx:idx+2]
             try:
                 checksum = int(txt, 16)
@@ -491,27 +534,25 @@ class SamiRecordDataParticle(DataParticle):
             num_char = 2 * num_bytes
             cs_calc = calc_crc( self.raw_data[3:3+num_char], num_bytes)
             # Add assert for CS.
-            '''
             log.debug("voltage_battery = " + str(voltage_battery))
             log.debug("thermister_raw = " + str(thermister_raw))
             log.debug("Record Checksup = " + str(hex(checksum)) + " versus " + str(hex(cs_calc)))
             
-            '''
-            result = [{DataParticleKey.VALUE_ID: SamiRecordDataParticleKey.UNIQUE_ID,
+            result = [{DataParticleKey.VALUE_ID: SamiDataRecordParticleKey.UNIQUE_ID,
                        DataParticleKey.VALUE: unique_id},
-                      {DataParticleKey.VALUE_ID: SamiRecordDataParticleKey.RECORD_LENGTH,
+                      {DataParticleKey.VALUE_ID: SamiDataRecordParticleKey.RECORD_LENGTH,
                        DataParticleKey.VALUE: record_length},                  
-                      {DataParticleKey.VALUE_ID: SamiRecordDataParticleKey.RECORD_TYPE,
+                      {DataParticleKey.VALUE_ID: SamiDataRecordParticleKey.RECORD_TYPE,
                        DataParticleKey.VALUE: record_type},
-                      {DataParticleKey.VALUE_ID: SamiRecordDataParticleKey.RECORD_TIME,
+                      {DataParticleKey.VALUE_ID: SamiDataRecordParticleKey.RECORD_TIME,
                        DataParticleKey.VALUE: record_time},
-                      {DataParticleKey.VALUE_ID: SamiRecordDataParticleKey.VOLTAGE_BATTERY,
+                      {DataParticleKey.VALUE_ID: SamiDataRecordParticleKey.VOLTAGE_BATTERY,
                        DataParticleKey.VALUE: voltage_battery},
-                      {DataParticleKey.VALUE_ID: SamiRecordDataParticleKey.THERMISTER_RAW,
+                      {DataParticleKey.VALUE_ID: SamiDataRecordParticleKey.THERMISTER_RAW,
                        DataParticleKey.VALUE: thermister_raw},
-                      {DataParticleKey.VALUE_ID: SamiRecordDataParticleKey.CHECKSUM,
+                      {DataParticleKey.VALUE_ID: SamiDataRecordParticleKey.CHECKSUM,
                        DataParticleKey.VALUE: checksum},
-                      {DataParticleKey.VALUE_ID: SamiRecordDataParticleKey.LIGHT_MEASUREMENT,
+                      {DataParticleKey.VALUE_ID: SamiDataRecordParticleKey.LIGHT_MEASUREMENT,
                        DataParticleKey.VALUE: pt_light_measurements}]
         
         return result
@@ -1313,7 +1354,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         The method that splits samples
         """
-        sieve_matchers = [RECORD_TYPE4_REGEX_MATCHER,    # Data Record
+        sieve_matchers = [DATA_RECORD_REGEX_MATCHER,     # Data Record
                           DEVICE_STATUS_REGEX_MATCHER,   # Reguar Status
                           CONFIG_REGEX_MATCHER]          # PCO2W Configuration
 
@@ -1323,7 +1364,6 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         for matcher in sieve_matchers:
             for match in matcher.finditer(raw_data):
-                log.debug("Match Found ****" + str(match.start()) + " " + str(match.end()))
                 return_list.append((match.start(), match.end()))
 
         # print(return_list)
@@ -1464,8 +1504,8 @@ class Protocol(CommandResponseInstrumentProtocol):
         @param: chunk - byte sequence that we want to create a particle from 
         @param: timestamp - port agent timestamp to include in the chunk 
         """
-        if(self._extract_sample(SamiRecordDataParticle, RECORD_TYPE4_REGEX_MATCHER, chunk, timestamp)):
-            log.debug("_got_chunk of Record Data = Passed good")
+        if(self._extract_sample(SamiDataRecordParticle, DATA_RECORD_REGEX_MATCHER, chunk, timestamp)):
+            log.debug("_got_chunk of Data Record = Passed good")
         elif(self._extract_sample(SamiStatusDataParticle, DEVICE_STATUS_REGEX_MATCHER, chunk, timestamp)):
             log.debug("_got_chunk of Status = Passed good")
         elif(self._extract_sample(SamiConfigDataParticle, CONFIG_REGEX_MATCHER, chunk, timestamp)):
