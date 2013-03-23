@@ -47,6 +47,13 @@ NTP_EPOCH = datetime.date(1900, 1, 1)
 NTP_DELTA = (SYSTEM_EPOCH - NTP_EPOCH).days * 24 * 3600
 
 
+"""
+NOTE!!! MAX_RECOVERY_ATTEMPTS must not be greater than 1; if we decide
+in the future to make it greater than 1, we need to test the 
+error_callback, because it will be able to be re-entered.
+"""
+MAX_RECOVERY_ATTEMPTS = 1  # !! MUST BE 1 and ONLY 1 (see above comment) !!
+
 MAX_SEND_ATTEMPTS = 15              # Max number of times we can get EAGAIN
 
 class PortAgentPacket():
@@ -155,10 +162,10 @@ class PortAgentPacket():
         checksum = 0
         for i in range(HEADER_SIZE):
             if i < OFFSET_P_CHECKSUM_LOW or i > OFFSET_P_CHECKSUM_HIGH:
-                checksum += struct.unpack_from('B', str(self.__header[i]))[0]
+                checksum ^= struct.unpack_from('B', str(self.__header[i]))[0]
                 
         for i in range(self.__length):
-            checksum += struct.unpack_from('B', str(self.__data[i]))[0]
+            checksum ^= struct.unpack_from('B', str(self.__data[i]))[0]
             
         return checksum
             
@@ -167,10 +174,10 @@ class PortAgentPacket():
         checksum = 0
         for i in range(HEADER_SIZE):
             if i < OFFSET_P_CHECKSUM_LOW or i > OFFSET_P_CHECKSUM_HIGH:
-                checksum += struct.unpack_from('B', self.__header[i])[0]
+                checksum ^= struct.unpack_from('B', self.__header[i])[0]
                 
         for i in range(self.__length):
-            checksum += struct.unpack_from('B', self.__data[i])[0]
+            checksum ^= struct.unpack_from('B', self.__data[i])[0]
             
         if checksum == self.__recv_checksum:
             self.__isValid = True
@@ -226,12 +233,6 @@ class PortAgentClient(object):
     asynchronously via a callback from this client's listener thread.
     """
     
-    """
-    NOTE!!! MAX_RECOVERY_ATTEMPTS must not be greater than 1; if we decide
-    in the future to make it greater than 1, we need to test the 
-    error_callback, because it will be able to be re-entered.
-    """
-    MAX_RECOVERY_ATTEMPTS = 1  # !! MUST BE 1 and ONLY 1 (see above comment) !!
     RECOVERY_SLEEP_TIME = 2
     HEARTBEAT_INTERVAL_COMMAND = "heartbeat_interval "
     BREAK_COMMAND = "break"
@@ -257,61 +258,95 @@ class PortAgentClient(object):
         self.recovery_mutex = threading.Lock()
         self.recovery_attempts = 0
         
-    def init_comms(self, user_callback_data = None, user_callback_raw = None, 
-                   user_callback_error = None, heartbeat = 0, 
-                   max_missed_heartbeats = None):
+    def _init_comms(self):
         """
         Initialize client comms with the logger process and start a
         listener thread.
         """
-        self.user_callback_data = user_callback_data        
-        self.user_callback_raw = user_callback_raw        
-        self.user_callback_error = user_callback_error
-        self.heartbeat = heartbeat
-        self.max_missed_heartbeats = max_missed_heartbeats        
-
+        
         try:
-            self.destroy_connection()
-            self.create_connection()
+            self._destroy_connection()
+            self._create_connection()
 
-            heartbeat_string = str(heartbeat)
+            heartbeat_string = str(self.heartbeat)
             self.send_config_parameter(self.HEARTBEAT_INTERVAL_COMMAND, 
                                        heartbeat_string)
-            self.listener_thread = Listener(self.sock, self.delim, 
-                                            heartbeat, max_missed_heartbeats, 
-                                            self.callback_data,
-                                            self.callback_raw, 
-                                            self.callback_error)
-            self.listener_thread.start()
-            log.info('PortAgentClient.init_comms(): connected to port agent at %s:%i.'
-                           % (self.host, self.port))        
-        except Exception as e:
-            errorString = "init_comms(): Exception initializing comms for " +  \
-                      str(self.host) + ": " + str(self.port) + ": " + repr(e)
-            log.error(errorString, exc_info=True)
-            time.sleep(self.RECOVERY_SLEEP_TIME)
-            self.callback_error(errorString)
+            
+            """
+            start the listener thread if instructed to
+            """
+            if self.start_listener:
+                self.listener_thread = Listener(self.sock,  
+                                                self.recovery_attempts,
+                                                self.delim, self.heartbeat, 
+                                                self.max_missed_heartbeats, 
+                                                self.callback_data,
+                                                self.callback_raw, 
+                                                self.callback_error, 
+                                                self.user_callback_error)
+                self.listener_thread.start()
 
-    def create_connection(self):
+            """
+            Reset recovery_attempts because we were successful; hopefully
+            the link doesn't oscillate (up and down).  If it does, take this
+            out.
+            """
+            self.recovery_attempts = 0
+            log.info('PortAgentClient._init_comms(): connected to port agent at %s:%i.'
+                           % (self.host, self.port))
+            return True
+                
+        except Exception as e:
+            errorString = "_init_comms(): Exception initializing comms for " +  \
+                      str(self.host) + ": " + str(self.port) + ": " + repr(e)
+            log.error(errorString, exc_info = True)
+            time.sleep(self.RECOVERY_SLEEP_TIME)
+            returnCode = self.callback_error(errorString)
+            if returnCode == True:
+                log.debug("_init_comms: callback_error succeeded.")
+            else:
+                log.error("_init_comms: callback_error failed to recover connection.")
+            
+            return returnCode
+
+    def _create_connection(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((self.host, self.port))
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock.setblocking(0)
 
-    def destroy_connection(self):
+    def _destroy_connection(self):
         if self.sock:
             self.sock.close()
             self.sock = None
             log.info('Port agent data socket closed.')
                         
+    def init_comms(self, user_callback_data = None, user_callback_raw = None, 
+                   user_callback_error = None, heartbeat = 0, 
+                   max_missed_heartbeats = None, start_listener = True):
+        
+        self.user_callback_data = user_callback_data        
+        self.user_callback_raw = user_callback_raw        
+        self.user_callback_error = user_callback_error
+        self.heartbeat = heartbeat
+        self.max_missed_heartbeats = max_missed_heartbeats
+        self.start_listener = start_listener 
+
+        if  False == self._init_comms():
+            error_string = ' port_agent_client private _init_comms failed.'
+            log.error(error_string)
+            raise InstrumentConnectionException(error_string)
+
     def stop_comms(self):
         """
-        Stop the listener thread and close client comms with the device
-        logger. This is called by the done function.
+        Stop the listener thread if there is one, and close client comms 
+        with the device logger. This is called by the done function.
         """
         log.info('Logger shutting down comms.')
-        self.listener_thread.done()
-        self.listener_thread.join()
+        if (self.listener_thread):
+            self.listener_thread.done()
+            self.listener_thread.join()
+
         #-self.sock.shutdown(socket.SHUT_RDWR)
         self.sock.close()
         self.sock = None
@@ -347,35 +382,33 @@ class PortAgentClient(object):
 
     def callback_error(self, errorString = "No error string passed."):
         """
-        A catastrophic error has occurred; attempt to recover, and if that fails,
-        call back into the instrument driver.
+        A catastrophic error has occurred; attempt to recover, but only
+        attempt MAX_RECOVERY_ATTEMPTS times. 
+        @param errorString: reason for call
+        @ retval True: recovery attempt worked
+                 False: recovery attempt failed
         """
         returnValue = False
         
         self.recovery_mutex.acquire()
 
-        if (self.recovery_attempts >= self.MAX_RECOVERY_ATTEMPTS):
+        if (self.recovery_attempts >= MAX_RECOVERY_ATTEMPTS):
             """
             Release the mutex here.  The other thread can notice an error and
             we will have not released the semaphore, and the thread will hang.  
             The fact that we've incremented the MAX_RECOVERY_ATTEMPTS will
             stop any re-entry.
-
             """        
             self.recovery_mutex.release()
-            if (self.user_callback_error):
-                log.error("Maximum connection_level recovery attempts (%d) reached." % (self.recovery_attempts))
-                self.user_callback_error(errorString)
-                returnValue = True
-            else:
-                log.error("No user_callback_data defined")
-                if self.listener_thread and self.listener_thread.is_alive():
-                    self.listener_thread.done()
-                returnValue = False
+            log.error("Maximum connection_level recovery attempts (%d) reached." % (self.recovery_attempts))
+            if self.listener_thread and self.listener_thread.is_alive():
+                log.info("Stopping listener thread.") 
+                self.listener_thread.done()
+            returnValue = False
         else:
             """
-            Try calling init_comms() again;
-            release the mutex before calling init_comms, which can cause
+            Try calling _init_comms() again;
+            release the mutex before calling _init_comms, which can cause
             another exception, and we will have not released the semaphore.  
             The fact that we've incremented the MAX_RECOVERY_ATTEMPTS will
             stop any re-entry.
@@ -383,10 +416,11 @@ class PortAgentClient(object):
             self.recovery_attempts = self.recovery_attempts + 1
             log.error("Attempting connection_level recovery; attempt number %d" % (self.recovery_attempts))
             self.recovery_mutex.release()
-            self.init_comms(self.user_callback_data, self.user_callback_raw, 
-                            self.user_callback_error, self.heartbeat, 
-                            self.max_missed_heartbeats)
-            returnValue = True
+            returnValue = self._init_comms()
+            if True == returnValue:
+                log.info("_init_comms recovery succeeded.")
+            else:
+                log.error("_init_comms recovery failed.")
             
         return returnValue
             
@@ -427,7 +461,7 @@ class PortAgentClient(object):
                                                 % (self.host, self.cmd_port, e))
 
 
-    def send(self, data, sock = None):
+    def send(self, data, sock = None, host = None, port = None):
         """
         Send data to the port agent.
         """
@@ -437,11 +471,18 @@ class PortAgentClient(object):
         """
         The socket can be a parameter (in case we need to send to the command
         port, for instance); if not provided, default to self.sock which 
-        should be the data port.
+        should be the data port.  The same pattern applies to the host and port,
+        but those are for logging information in case of error.
         """
         if (not sock):
             sock = self.sock
 
+        if (not host):
+            host = self.host
+
+        if (not port):
+            port = self.port
+            
         if sock:
             would_block_tries = 0
             continuing = True
@@ -462,26 +503,39 @@ class PortAgentClient(object):
                             #error_string = 'Send EWOULDBLOCK attempts (%d) exceeded while sending to %s:%i'  % (would_block_tries, self.host, self.port)
                             error_string = 'Send EWOULDBLOCK attempts (%d) exceeded while sending to %r'  % (would_block_tries, sock.getpeername())
                             log.error(error_string)
-                            self.callback_error(error_string)
                             continuing = False 
+                            self._invoke_error_callback(error_string)
                         else:
                             #error_string = 'Socket error while sending to (%s:%i): %r; tries = %d'  % (self.host, self.port, e, would_block_tries)
                             error_string = 'Socket error while sending to %r: %r; tries = %d'  % (sock.getpeername(), e, would_block_tries)
                             log.error(error_string)
                             time.sleep(.1)
                     else:
-                        #error_string = 'Socket error while sending to (%s:%i): %r'  % (self.host, self.port, e)
-                        error_string = 'Socket error while sending to %r: %r'  % (sock.getpeername(), e)
+                        error_string = 'Socket error while sending to (%r:%r): %r'  % (host, port, e)
+                        #error_string = 'Socket error while sending to %r: %r'  % (sock.getpeername(), e)
                         log.error(error_string)
-                        self.callback_error(error_string)
-                        continuing = False
+                        self._invoke_error_callback(error_string)
         else:
             error_string = 'No socket defined!'
             log.error(error_string)
-            self.callback_error(error_string)
+            self._invoke_error_callback(error_string)
         
         return total_bytes_sent
             
+    def _invoke_error_callback(self, error_string = "No error string passed."):
+        """
+        Invoke callback_error; and its return_code indicates that it failed to
+        recover, invoke the user_error_callback and raise an exception  
+        @param error_string: error description.
+        """
+        log.debug('port_agent_client listen thread calling local_callback_error.')
+        if False == self.callback_error(error_string):
+            log.debug('port_agent_client calling user_callback_error and raising exception.')
+            self.user_callback_error(error_string)
+            raise InstrumentConnectionException(error_string)
+        else:
+            log.debug('port_agent_client listen thread: recovery succeeded.')
+
 class Listener(threading.Thread):
 
     MAX_HEARTBEAT_INTERVAL = 20 # Max, for range checking parameter
@@ -493,19 +547,29 @@ class Listener(threading.Thread):
     the port agent process. 
     """
     
-    def __init__(self, sock, delim = None, heartbeat = 0, 
+    def __init__(self, sock, recovery_attempt, 
+                 delim = None, heartbeat = 0, 
                  max_missed_heartbeats = None, 
                  callback_data = None, callback_raw = None, 
-                 callback_error = None):
+                 local_callback_error = None,  
+                 user_callback_error = None):
         """
         Listener thread constructor.
         @param sock The socket to listen on.
         @param delim The line delimiter to split incoming lines on, used in
         debugging when no callback is supplied.
-        @param callback The callback on data arrival.
+        @param heartbeat The heartbeat interval in which to expect heartbeat
+        messages from the Port Agent.
+        @param max_missed_heartbeats The number of allowable missed heartbeats
+        before attempting recovery.
+        @param callback_data The callback on data arrival.
+        @param callback_raw The callback for raw.
+        @param local_callback_data The local callback when error encountered.
+        @param user_callback_data The user callback on error_encountered.
         """
         threading.Thread.__init__(self)
         self.sock = sock
+        self.recovery_attempt = recovery_attempt
         self._done = False
         self.linebuf = ''
         self.delim = delim
@@ -530,24 +594,36 @@ class Listener(threading.Thread):
             else:
                 log.error("No callback_raw function has been registered")            
                             
-        def fn_callback_error(errorString = "No error string passed."):
+        def fn_local_callback_error(errorString = "No error string passed."):
             """
-            Error callback; try our own recovery first; if this gets called
-            again, we call the callback_error
+            Local error callback; this will try local recovery first; 
             """
-            log.error("Connection error: %s" % (errorString))
+            log.error("fn_local_callback_error, Connection error: %s" % (errorString))
             
-            if callback_error:
-                callback_error(errorString)
+            if local_callback_error:
+                return local_callback_error(errorString)
             else:
-                log.error("No callback_raw function has been registered")            
+                log.error("No local_callback_error function has been registered")            
+
+                            
+        def fn_user_callback_error(errorString = "No error string passed."):
+            """
+            User error callback; 
+            """
+            log.error("fn_user_callback_error, Connection error: %s" % (errorString))
+            
+            if user_callback_error:
+                user_callback_error(errorString)
+            else:
+                log.error("No user_callback_error function has been registered")            
 
         """
         Now that the callbacks have have been defined, assign them
         """                
         self.callback_data = fn_callback_data
         self.callback_raw = fn_callback_raw
-        self.callback_error = fn_callback_error
+        self.local_callback_error = fn_local_callback_error
+        self.user_callback_error = fn_user_callback_error
 
     def heartbeat_timeout(self):
         log.error('heartbeat timeout')
@@ -559,7 +635,7 @@ class Listener(threading.Thread):
         if self.heartbeat_missed_count <= 0:
             errorString = 'Maximum allowable Port Agent heartbeats (' + str(self.max_missed_heartbeats) + ') missed!'
             log.error(errorString)
-            self.callback_error(errorString)
+            self._invoke_error_callback(self.recovery_attempt, errorString)
         else:
             self.start_heartbeat_timer()
 
@@ -666,9 +742,12 @@ class Listener(threading.Thread):
                     elif len(header) == 0:
                         errorString = 'Zero bytes received from port_agent socket'
                         log.error(errorString)
-                        self.callback_error(errorString)
+                        self._invoke_error_callback(self.recovery_attempt, errorString)
                         """
-                        This next statement causes the thread to exit.
+                        This next statement causes the thread to exit.  This 
+                        thread is done regardless of which condition exists 
+                        above; it is the job of the callbacks to restart the
+                        thread
                         """
                         self._done = True
                 
@@ -682,7 +761,7 @@ class Listener(threading.Thread):
                     elif len(data) == 0:
                         errorString = 'Zero bytes received from port_agent socket'
                         log.error(errorString)
-                        self.callback_error(errorString)
+                        self._invoke_error_callback(self.recovery_attempt, errorString)
                         """
                         This next statement causes the thread to exit.
                         """
@@ -700,9 +779,28 @@ class Listener(threading.Thread):
                 else:
                     errorString = 'Socket error while receiving from port agent: %r'  % (e)
                     log.error(errorString)
-                    self.callback_error(errorString)
-                    self._done = True
+                    self._invoke_error_callback(self.recovery_attempt, errorString)
 
 
         log.info('Port_agent_client thread done listening; going away.')
 
+
+    def _invoke_error_callback(self, recovery_attempt, error_string = "No error string passed."):
+        """
+        Invoke either the user_error_callback or the local_error_callback, depending upon the
+        recovery_attempt value.  If the local_error_callback is invoked, and its return_code
+        indicates that it failed, invoke the user_error_callback. 
+        @param recovery_attempt: the number of this recovery attempt.
+        @param error_string: error description.
+        """
+        if self.recovery_attempt < MAX_RECOVERY_ATTEMPTS:
+            log.debug('port_agent_client listen thread calling local_callback_error.')
+            recovery = self.local_callback_error(error_string)
+            if (False == recovery):
+                log.debug('port_agent_client listen thread calling user_callback_error.')
+                self.user_callback_error(error_string)
+            else:
+                log.debug('port_agent_client listen thread: recovery succeeded.')
+        else:
+            log.debug('port_agent_client listen thread calling user_callback_error.')
+            self.user_callback_error(error_string)
