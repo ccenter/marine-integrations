@@ -75,12 +75,11 @@ from mi.instrument.sami.pco2w.cgsn.driver import NEWLINE
 from mi.instrument.sami.pco2w.cgsn.driver import InstrumentCmds
 
 # Support Tools.
-from mi.instrument.sami.pco2w.cgsn.driver import SAMI_DRIVER_PARAM_INDEX
 from mi.instrument.sami.pco2w.cgsn.driver import get_timestamp_delayed_sec  # Modified 
+from mi.instrument.sami.pco2w.cgsn.driver import get_timestamp_sec  # Modified 
+from mi.instrument.sami.pco2w.cgsn.driver import convert_timestamp_to_sec
 from mi.instrument.sami.pco2w.cgsn.driver import replace_string_chars
-from mi.instrument.sami.pco2w.cgsn.driver import SamiConfiguration
-from mi.instrument.sami.pco2w.cgsn.driver import vb_mid
-from mi.instrument.sami.pco2w.cgsn.driver import calc_crc
+from mi.instrument.sami.pco2w.cgsn.driver import SamiManager
 
 # Data Particles
 from mi.instrument.sami.pco2w.cgsn.driver import SamiImmediateStatusDataParticleKey
@@ -110,6 +109,7 @@ SAMPLE_ERROR_DATA = "?03" + NEWLINE
 SAMPLE_CONTROL_RECORD = "*5B2780C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B"
 SAMPLE_DATA_RECORD_1  = "*5B2704C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B" # Also used in crc-test so please do not change.
 SAMPLE_DATA_RECORD_2  = "*7E2705CBACEE7F007D007D0B2A00BF080500E00187034A008200790B2D00BE080600DE0C1406C98C"
+SAMPLE_DATA_RECORD_3  = "*F72705CD73EB6B005500850A42067807FB06C226513416005300870A40067807FE06C00C88066961"
 #                        01234567891123456789212345678931234567894123456789
 
 # Regular Status.
@@ -215,11 +215,11 @@ class DataParticleMixin(DriverTestMixin):
     }
     
     _control_record_parameters = {   
-        SamiControlRecordParticleKey.UNIQUE_ID:        { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 91, REQUIRED: True},
-        SamiControlRecordParticleKey.RECORD_LENGTH:    { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 39, REQUIRED: True},
-        SamiControlRecordParticleKey.RECORD_TYPE:      { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x80,  REQUIRED: True},
-        SamiControlRecordParticleKey.RECORD_TIME:      { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0xC8EF9FC9, REQUIRED: True},
-        SamiControlRecordParticleKey.CHECKSUM:         { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x0, REQUIRED: True},
+        SamiControlRecordParticleKey.UNIQUE_ID:     { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 91, REQUIRED: True},
+        SamiControlRecordParticleKey.RECORD_LENGTH: { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 39, REQUIRED: True},
+        SamiControlRecordParticleKey.RECORD_TYPE:   { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x80,  REQUIRED: True},
+        SamiControlRecordParticleKey.RECORD_TIME:   { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0xC8EF9FC9, REQUIRED: True},
+        SamiControlRecordParticleKey.CHECKSUM:      { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x0, REQUIRED: True},
     }
    
     # Test results that get decoded from the string sent to the chunker.
@@ -414,10 +414,16 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
 
         self.assert_enum_has_no_duplicates(Parameter())
 
+        self.assert_enum_has_no_duplicates(SamiControlRecordParticleKey)
+        self.assert_enum_has_no_duplicates(SamiDataRecordParticleKey)
+        self.assert_enum_has_no_duplicates(SamiConfigDataParticleKey)
+        self.assert_enum_has_no_duplicates(SamiImmediateStatusDataParticleKey)
+        self.assert_enum_has_no_duplicates(SamiRegularStatusDataParticleKey)
+        
         # Test capabilites for duplicates, them verify that capabilities is a subset of proto events
         self.assert_enum_has_no_duplicates(Capability())
         self.assert_enum_complete(Capability(), ProtocolEvent())
-
+   
     def test_chunker(self):
         """
         Test the chunker and verify the particles created.
@@ -526,18 +532,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
 
         driver = InstrumentDriver(self._got_data_event_callback)
         self.assert_capabilities(driver, capabilities)
-   
-    def test_parse_status_response(self):
-        """
-        Test the parsing of ALL Data Dictionary parameters 
-        """
-        driver = InstrumentDriver(self._got_data_event_callback)
-        self.assert_initialize_driver(driver, ProtocolState.COMMAND)
-        
-        source = SAMPLE_REGULAR_STATUS_DATA_2
-
-        driver._protocol._parse_S_response(source, prompt=None)
-        
+          
     def test_parse_config_response(self):
         """
         Test the parsing of ALL Data Dictionary parameters 
@@ -554,7 +549,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         self.assert_driver_parameters(pd, True)
 
         # Define the index of the SAMI-CO2 Driver 4/5 Parameters.
-        param_index = SAMI_DRIVER_PARAM_INDEX
+        param_index = SamiManager.SAMI_DRIVER_PARAM_INDEX
         
         # Replace Pump Pulse (Driver-4 parameter first 2 characters).
         source = replace_string_chars(source, param_index, "1120FFA8181C010038")
@@ -623,35 +618,58 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         pd = driver._protocol._param_dict.get_config()
         self.assertEqual(pd.get(Parameter.NUM_EXTRA_PUMP_PULSE_CYCLES), 0x30)
 
+    def test_parse_regular_response(self):
+        """
+        Test response from Regular Status Command
+        """
+        driver = InstrumentDriver(self._got_data_event_callback)
+        self.assert_initialize_driver(driver, ProtocolState.COMMAND)        
+        source = SAMPLE_REGULAR_STATUS_DATA_2
+
+        # Verify that parser sets all know parameters.
+        driver._protocol._parse_S_response(source, prompt=None)
         
     def test_parse_immediate_response(self):
         """
-        Test response from set commands.
+        Test response from Immediate Status Command
         """
         driver = InstrumentDriver(self._got_data_event_callback)
         self.assert_initialize_driver(driver, ProtocolState.COMMAND)
         source = SAMPLE_IMMEDIATE_STATUS_DATA
         
-        # First verify that parse ds sets all know parameters.
-        driver._protocol._parse_I_response(source, prompt=None)
+        # Verify that parser sets all know parameters.
+        driver._protocol._parse_I_response(source, prompt=None)     
 
-        packet = PortAgentPacket()
-        packet.attach_data(source) 
-        packet.pack_header()
-
-        driver._protocol._parse_I_response(source, prompt=None)           
-
+    def test_parse_take_response(self):
+        """
+        Test response from Take Sample commands.
+        """
+        driver = InstrumentDriver(self._got_data_event_callback)
+        self.assert_initialize_driver(driver, ProtocolState.COMMAND)
+        source = SAMPLE_REGULAR_STATUS_DATA_2
+        
+        # Verify that parser sets all know parameters.
+        driver._protocol._parse_R_response(source, prompt=None)
+        
     def test_utils(self):
         """
         Test the custom utility functions
         """       
+        log.debug("Testing Error Handling")
+        error_txt = SamiManager.get_error_str( 0xA )
+        self.assertEqual(error_txt, "Flash is Not Open")
+        error_txt = SamiManager.get_error_str(-1)
+        self.assertEqual(error_txt, None)
+        error_txt = SamiManager.get_error_str(0x100)
+        self.assertEqual(error_txt, None)
+        
         log.debug("Testing vb_mid() Utility")
         s1 = "1234567890"
-        s2 = vb_mid(s1, 2, 2)
+        s2 = SamiManager.vb_mid(s1, 2, 2)
         self.assertEqual(s2, "23")
         
         # Test past the end of the string.
-        s2 = vb_mid(s1, 10, 2)
+        s2 = SamiManager.vb_mid(s1, 10, 2)
         self.assertEqual(s2, "0")
         
         log.debug("Testing replace_string_chars() utility")
@@ -672,34 +690,49 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         
         log.debug("Testing checksum utility")
         s1 = "0000"
-        cs = calc_crc(s1, 2)
+        cs = SamiManager.calc_crc(s1, 2)
         self.assertEqual(cs, 0x00)
         
-        # This is a known CRC test.
+        # This is a known CRC test
         record = SAMPLE_DATA_RECORD_1
         record_length = 39
         num_bytes = (record_length - 1)
         num_char = 2 * num_bytes
         # Sami says throw away the 1st 3 characters.
-        cs_calc = calc_crc( record[3:3+num_char], num_bytes)
+        cs_calc = SamiManager.calc_crc( record[3:3+num_char], num_bytes)
         self.assertEqual(cs_calc, 0x3B)
         
         # Use our trusted replace-string function to corrupt a byte.
         record = replace_string_chars(record, 10, "FFF")
-        cs_calc = calc_crc( record[3:3+num_char], num_bytes)
+        cs_calc = SamiManager.calc_crc( record[3:3+num_char], num_bytes)
         self.assertNotEqual(cs_calc, 0x3B)       
+
+        log.debug("Testing time utilities")
+        time_str = "abc"
+        tsec = convert_timestamp_to_sec(time_str)
+        self.assertEqual(tsec, 0)
+
+        time_str = "01-01-1970 00:00:00"
+        tsec = convert_timestamp_to_sec(time_str)
+        self.assertEqual(tsec, 0)
+
+        # these functions wrapper convert_timestamp_to_sec() so just call for test.
+        tsec = get_timestamp_sec()
+        log.debug("tsec = " + str(tsec))
+        tsec = get_timestamp_delayed_sec()
+        log.debug("tsec = " + str(tsec))
 
     def test_config_tool(self):
         """
         Test the custom configuration string management tool.
         """
-        sami_config = SamiConfiguration()
+        sami_config = SamiManager()
         r = sami_config.set_config_str( SAMPLE_CONFIG_DATA_1 )
         if( not r ):
             log.debug("Invalid configuration setting")
             
         # Set the time to the current time
-        tnow_sec_F = time.time()   # Current seconds since Epoch
+        tnow_sec_F = time.time()   # Currentonds since Epoch
         tnow_sec = int(tnow_sec_F)
         r = sami_config.set_config_time(tnow_sec)
         self.assertEqual(r, True)
@@ -728,28 +761,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         self.assertEqual(r, True)
         s = sami_config.get_config_str()
         # Only the first 232 characters of a configuration string are valid.
-        self.assertEqual(s[0:232],SAMPLE_CONFIG_DATA_1[0:232])
-        
-    def test_complete_sample(self):
-        driver = InstrumentDriver(self._got_data_event_callback)
-        
-        """
-        Force the driver into AUTOSAMPLE state so that it will parse and 
-        publish samples
-        """
-        driver = InstrumentDriver(self._got_data_event_callback)
-        self.assert_initialize_driver(driver, ProtocolState.AUTOSAMPLE)
-#        driver.set_test_mode(True)
-#        temp_driver.test_force_state(state = DriverProtocolState.AUTOSAMPLE)
-#        current_state = temp_driver.get_resource_state()
-#        self.assertEqual(current_state, DriverProtocolState.AUTOSAMPLE)
-        
-        self.reset_test_vars()
-        packet = PortAgentPacket()
-        packet.attach_data(SAMPLE_DATA_RECORD_1)
-        driver._protocol.got_data(packet)        
-        self.assertFalse(self.raw_stream_received)
-        self.assertFalse(self.parsed_stream_received)
+        self.assertEqual(s[0:232], SAMPLE_CONFIG_DATA_1[0:232])
         
 ###############################################################################
 #                            INTEGRATION TESTS                                #
