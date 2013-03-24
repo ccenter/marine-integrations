@@ -45,57 +45,91 @@ from mi.core.instrument.data_particle import DataParticleKey
 from mi.core.instrument.data_particle import CommonDataParticleType
 from mi.core.instrument.chunker import StringChunker
 
+###############################################################################
+# Program Constants
+###############################################################################   
 NEWLINE = '\r'  # CJC Note: Do Not Use '\r\n'
 NSECONDS_1904_TO_1970 = 2082844800
 TIMEOUT = 10        # Default Timeout.
 
-# Program Constants.
-SAMI_DRIVER_PARAM_INDEX = 78  # String index of SAMI-CO2 Driver 4/5 Parameters.
+# This will decode n+1 chars for {n}
+REGULAR_STATUS_REGEX = r'[:](\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f])(\w[0-9A-Fa-f])'
+REGULAR_STATUS_REGEX_MATCHER = re.compile(REGULAR_STATUS_REGEX)
 
-# Error Look Up Table
-# ASCII Hex errors returned from Insturment.
-sami_error_table = [
-    "Wrong Number of Arguments", # 0x00
-    "Command Not Implemented",
-    "Invalid Arguments",
-    "Command Buffer Overflow",
-    "Invalid Command Enter A return for a list of commands",
-    "Error in config data",
-    "> 2000 pages",
-    "Invalid Configuration",
-    "Bad Key", # 0x08
-    "Flash is Open",
-    "Flash is Not Open",
-    "Too Many Arguments",
-    "Too Few Arguments",
-    "Memory Full",
-    "Not Valid with Echo Off",
-    "Unimplemented Extension Index in Configuration",
-    "Flash Data not erased",
-    "Invalid Arguments"]   # 0x11
-ERROR_TABLE_SIZE = 18
+# Record Type4 or 5 are 39 bytes (78char)
+DATA_RECORD_REGEX = r'[*](\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[4-5]{1})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{57})'
+DATA_RECORD_REGEX_MATCHER = re.compile(DATA_RECORD_REGEX)
+    
+CONTROL_RECORD_REGEX = r'[*](\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[^4-5]{1})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{57})'
+CONTROL_RECORD_REGEX_MATCHER = re.compile(CONTROL_RECORD_REGEX)
 
-######
-# Software Tools.
-#####
-def vb_mid(s, start, length):
+# Note: First string character "C" is valid for current time.
+CONFIG_REGEX = r'[C](\w[0-9A-Fa-f]{6})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{25})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{99})'
+CONFIG_REGEX_MATCHER = re.compile(CONFIG_REGEX)
+
+ERROR_REGEX = r'[?](\w[0-9A-Fa-f]{1})' # (\w[0-9A-Fa-f])'
+ERROR_REGEX_MATCHER = re.compile(ERROR_REGEX)
+    
+IMMEDIATE_STATUS_REGEX = r'(\w[0-9A-Fa-f]{1})'
+IMMEDIATE_STATUS_REGEX_MATCHER = re.compile(IMMEDIATE_STATUS_REGEX)
+
+# Create a global Sami Configuration string used to R/W updates.
+# This is the string from the PC02W_Low_Level_SAMI_Use_1.pdf document.
+# Note: Zero Padding removed
+SAMI_DEFAULT_CONFIG = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C071020FFA8181C0100381001012025640004333833350002000102000"
+
+###############################################################################
+# Program Declarations
+###############################################################################   
+# A new string being built but not yet sent to Sami Instrument.
+sami_config_new_str = None
+sami_config_new_valid = False  # Make true when new_str complete.
+
+###############################################################################
+# Sami Software Utilities
+###############################################################################
+def convert_timestamp_to_sec(time_str):
+    '''
+    Convert a time string to seconds since 1970.
+    @param time_str: Time String of format "dd-mm-yyyy hr:mn:sec"
+    @return: time in seconds since 1970 (Epoc)
+    '''
+    sec = 0
+    timestamp_regex = re.compile(r"(\d\d)-(\d\d)-(\d\d\d\d) (\d\d):(\d\d):(\d\d)")
+    match = timestamp_regex.match(time_str)
+    if( match ):
+        dd = match.group(1)
+        mm = match.group(2)
+        yy = match.group(3)
+        hr = match.group(4)
+        mn = match.group(5)
+        ss = match.group(6)
+        
+        # month_mapping: a mapping for 3 letter months to integers
+        d1 = datetime.datetime(int(yy), int(mm), int(dd), int(hr), int(mn), int(ss))
+        d1_tuple = d1.timetuple()
+        secondsF = calendar.timegm(d1_tuple)
+        sec = int(secondsF)
+    return(sec)
+
+def get_timestamp_delayed_sec():
     """
-    Basic-Programming mid() function utility.
-    Function to extract middle of string (used to be compatible with Sunbeam SW Logic).
-    @param: s - Input string
-    @param: start - Start Index
-    @param: length - Desired string extraction length.
-    @return: Middle string
+    Modify the time accessor to get Epoc (Unix time)
+    @return: Time in seconds since 1970
     """
-    start = start - 1   # VB uses a 1's based indexing
-    end = start + length
-    # Limit to input string length.
-    s_len = len(s)
-    if(end >= s_len):
-        s_mid = s[start:]
-    else:
-        s_mid = s[start:end]
-    return s_mid
+    s = get_timestamp_delayed('%d-%m-%Y %H:%M:%S %Z')
+    tsec = convert_timestamp_to_sec(s)
+    return(tsec)
+
+def get_timestamp_sec():
+    """
+    Modify the time accessor to get Epoc (Unix time)
+    @return: Time in seconds since 1970
+    """
+    s = get_timestamp('%d-%m-%Y %H:%M:%S %Z')
+    tsec = convert_timestamp_to_sec(s)       
+#    print("Today: ", time.asctime( time.gmtime(tsec) ))
+    return(tsec)
 
 def replace_string_chars(s1, pos, s2):
     """
@@ -110,43 +144,33 @@ def replace_string_chars(s1, pos, s2):
         if(len2 > 0):
             s1 = s1[0:pos] + s2 + s1[pos+len2:]
     return(s1)
-    
-def calc_crc(s, num_points):
-    """
-    Compute the checksum for a Sami String.
-    @param s: string for check-sum analysis.
-    @param num_points: number of bytes (each byte is 2-chars).
-    """
-    cs = 0
-    k = 0
-    for i in range(num_points):
-#        print("I= " + str(i) + " " + s[k:k+2] )
-        value = int(s[k:k+2],16)  # 2-chars per data point
-        cs = cs + value
-        k = k + 2
-    cs = cs & 0xFF        
-    return(cs)
 
-class SamiConfiguration:
+###############################################################################
+# General Class Definitions
+###############################################################################   
+class SamiManager():
     """
     Sami PCO2W Configuration String Management Class.
     This class is to contain data to manage the Sami Configuration String field formats
     Sami Fields are fixed in position.    """
+    SAMI_DRIVER_PARAM_INDEX = 78  # String index of SAMI-CO2 Driver 4/5 Parameters.
     _MIN_CONFIG_STR_LENGTH = 132
+    
     _config_str = None
+    _config_valid = False
     
     # The Unix epoch is the time 00:00:00 UTC on 1 January 1970 (or 1970-01-01T00:00:00Z ISO 8601). 
     _min_time_sec_1970 = 0x0
     _min_time_sec_1904 = 0x0
     _max_time_sec_1970 = 0x0
     _max_time_sec_1904 = 0x0
-    is_valid = False
-    
+  
     def __init__(self):
         self._initialize_params()
 
     def _initialize_params(self):
         self._config_str = "Not Initialized"
+        self._config_valid = False
         self._init_time_range()
 
     def _init_time_range(self):
@@ -167,7 +191,7 @@ class SamiConfiguration:
         """
         Clear the configuration string
         """
-        self.is_valid = False
+        self._config_valid = False
         self._config_str = ""
         for i in range(0, 232):
             self._config_str += "0"
@@ -186,7 +210,14 @@ class SamiConfiguration:
             time_sec -= NSECONDS_1904_TO_1970
             time_txt = '{:08X}'.format(time_sec)
         return(time_txt)
-        
+
+    def is_valid(self):
+        """
+        Determine if a valid configuration string has been created/read
+        @return: True if configuration valid.
+        """
+        return(self._config_valid)
+            
     def set_config_str(self, s):
         """
         Replace the date-time in a configuration string.
@@ -196,7 +227,7 @@ class SamiConfiguration:
         r = False
         if (self._verify_config(s) is True):
             self._config_str = s[0:232]
-            self.is_valid = True
+            self._config_valid = True
             r = True
         return(r)
     
@@ -214,7 +245,7 @@ class SamiConfiguration:
             log.debug("max_time = " + str(self._max_time_sec_1970))
             log.debug("Time too late %d/%d" %(time_sec_1970, self._max_time_sec_1970) )           
         else:
-            sami_time_txt = SamiConfiguration.make_sami_time_string(time_sec_1970)
+            sami_time_txt = SamiManager.make_sami_time_string(time_sec_1970)
             self._config_str = sami_time_txt + self._config_str[8:232]
             r = True
         return(r)
@@ -252,9 +283,9 @@ class SamiConfiguration:
             return(False)
         
         # Sami says these values are always this.    
-        txt = vb_mid(s,33,2)
+        txt = SamiManager.vb_mid(s,33,2)
         dev_id = int(txt,16)
-        txt = vb_mid(s,35,2)
+        txt = SamiManager.vb_mid(s,35,2)
         param_ptr = int(txt,16)
         if( (dev_id > 16) | (param_ptr > 100) ):
             log.debug("Configuration is corrupted or erased! " + str(hex(dev_id)) + " " + str(hex(param_ptr)) )
@@ -262,6 +293,78 @@ class SamiConfiguration:
         
         return( True )
     
+    @staticmethod
+    def calc_crc(s, num_points):
+        """
+        Compute the checksum for a Sami String.
+        @param s: string for check-sum analysis.
+        @param num_points: number of bytes (each byte is 2-chars).
+        """
+        cs = 0
+        k = 0
+        for i in range(num_points):
+    #        print("I= " + str(i) + " " + s[k:k+2] )
+            value = int(s[k:k+2],16)  # 2-chars per data point
+            cs = cs + value
+            k = k + 2
+        cs = cs & 0xFF        
+        return(cs)
+
+    @staticmethod
+    def get_error_str(error_no):
+        """
+        Convert the Sami Error Code into an error string.
+        @param error_no: Error Number.
+        @return String representation of error number.
+        """  
+        # Error Look Up Table
+        # ASCII Hex errors returned from Insturment.
+        ERROR_TABLE_SIZE = 18
+        sami_error_table = [
+            "Wrong Number of Arguments", # 0x00
+            "Command Not Implemented",
+            "Invalid Arguments",
+            "Command Buffer Overflow",
+            "Invalid Command Enter A return for a list of commands",
+            "Error in config data",
+            "> 2000 pages",
+            "Invalid Configuration",
+            "Bad Key", # 0x08
+            "Flash is Open",
+            "Flash is Not Open",
+            "Too Many Arguments",
+            "Too Few Arguments",
+            "Memory Full",
+            "Not Valid with Echo Off",
+            "Unimplemented Extension Index in Configuration",
+            "Flash Data not erased",
+            "Invalid Arguments"]   # 0x11
+    
+        error_str = None
+        if((error_no >= 0x0) & (error_no < ERROR_TABLE_SIZE)):
+            error_str = sami_error_table[error_no]
+        return(error_str)
+    
+    @staticmethod
+    def vb_mid(s, start, length):
+        """
+        Basic-Programming mid() function utility.
+        Function to extract middle of string (used to be compatible with Sunbeam SW Logic).
+        @param: s - Input string
+        @param: start - Start Index
+        @param: length - Desired string extraction length.
+        @return: Middle string
+        """
+        start = start - 1   # VB uses a 1's based indexing
+        end = start + length
+        # Limit to input string length.
+        s_len = len(s)
+        if(end >= s_len):
+            s_mid = s[start:]
+        else:
+            s_mid = s[start:end]
+        return s_mid
+
     @staticmethod
     def make_sami_time_string(time_sec_1970):
         """
@@ -283,46 +386,6 @@ class SamiConfiguration:
         txt = time.asctime( time.gmtime(time_sec) )
         return(txt)
     
-#
-# Create a global Sami Configuration string used to R/W updates.
-# This is the string from the PC02W_Low_Level_SAMI_Use_1.pdf document.
-SAMI_DEFAULT_CONFIG = "CAB39E84000000F401E13380570007080401000258030A0002580017000258011A003840001C071020FFA8181C01003810010120256400043338333500020001020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-# Note: 2 bytes removed from text-book example to get required 232 characters.
-sami_config = SamiConfiguration()
-sami_config.set_config_str(SAMI_DEFAULT_CONFIG)
-
-# A new string being built but not yet sent to Sami Instrument.
-sami_config_new_str = None
-sami_config_new_valid = False  # Make true when new_str complete.
-
-# This will decode n+1 chars for {n}
-# REGULAR_STATUS_REGEX = r'[:](\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f])+.*?\r\n'
-REGULAR_STATUS_REGEX = r'[:](\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f])(\w[0-9A-Fa-f])'
-REGULAR_STATUS_REGEX_MATCHER = re.compile(REGULAR_STATUS_REGEX)
-
-# Record Type4 or 5 are 39 bytes (78char)
-DATA_RECORD_REGEX = r'[*](\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[4-5]{1})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{57})'
-# DATA_RECORD_REGEX = r'[*](\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{57})'
-DATA_RECORD_REGEX_MATCHER = re.compile(DATA_RECORD_REGEX)
-    
-CONTROL_RECORD_REGEX = r'[*](\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[^4-5]{1})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{57})'
-# CONTROL_RECORD_REGEX = r'[*](\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{57})'
-CONTROL_RECORD_REGEX_MATCHER = re.compile(CONTROL_RECORD_REGEX)
-
-# Note: CA is valid for current time.
-CONFIG_REGEX = r'[C](\w[0-9A-Fa-f]{6})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{7})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{25})(\w[0-9A-Fa-f]{5})(\w[0-9A-Fa-f]{3})(\w[0-9A-Fa-f]{1})(\w[0-9A-Fa-f]{99})'
-CONFIG_REGEX_MATCHER = re.compile(CONFIG_REGEX)
-
-ERROR_REGEX = r'[?](\w[0-9A-Fa-f]{1})' # (\w[0-9A-Fa-f])'
-ERROR_REGEX_MATCHER = re.compile(ERROR_REGEX)
-    
-IMMEDIATE_STATUS_REGEX = r'(\w[0-9A-Fa-f]{1})'
-IMMEDIATE_STATUS_REGEX_MATCHER = re.compile(IMMEDIATE_STATUS_REGEX)
-
-###
-#    Driver Constant Definitions
-###
-
 class ScheduledJob(BaseEnum):
     ACQUIRE_STATUS = 'acquire_status'
     CLOCK_SYNC = 'clock_sync'
@@ -417,45 +480,19 @@ class Prompt(BaseEnum):
     COMMAND = ""
     BAD_COMMAND = "?"
     
-# Convert a time string into Epoc Seconds.
-def convert_timestamp_to_sec(time_str):
-    '''
-    Convert a time string of the format dd-mm-yyyy hr:mn:sec to seconds since 1970.
-    '''
-    sec = 0
-    timestamp_regex = re.compile(r"(\d\d)-(\d\d)-(\d\d\d\d) (\d\d):(\d\d):(\d\d)")
-    match = timestamp_regex.match(time_str)
-    if( match ):
-        dd = match.group(1)
-        mm = match.group(2)
-        yy = match.group(3)
-        hr = match.group(4)
-        mn = match.group(5)
-        ss = match.group(6)
-        
-        # month_mapping: a mapping for 3 letter months to integers
-        d1 = datetime.datetime(int(yy), int(mm), int(dd), int(hr), int(mn), int(ss))
-        d1_tuple = d1.timetuple()
-        secondsF = calendar.timegm(d1_tuple)
-        sec = int(secondsF)
-    return(sec)
-
-# Modify the time accessor to get Epoc.
-def get_timestamp_delayed_sec():
-    s = get_timestamp_delayed('%d-%m-%Y %H:%M:%S %Z')
-    tsec = convert_timestamp_to_sec(s)
-    return(tsec)
-
-def get_timestamp_sec():
-    s = get_timestamp('%d-%m-%Y %H:%M:%S %Z')
-    tsec = convert_timestamp_to_sec(s)       
-#    print("Today: ", time.asctime( time.gmtime(tsec) ))
-    return(tsec)
+###############################################################################
+# Global Declaration - Sami Configuration
+###############################################################################   
+sami_config = SamiManager()
+sami_config.set_config_str(SAMI_DEFAULT_CONFIG)
 
 ###############################################################################
 # Data Particles
 ###############################################################################   
 class SamiControlRecordParticleKey(BaseEnum):
+    """
+    Control Record Data Partical.
+    """
     UNIQUE_ID = 'unique_id'
     RECORD_LENGTH = 'record_length'
     RECORD_TYPE = 'record_type'
@@ -464,7 +501,7 @@ class SamiControlRecordParticleKey(BaseEnum):
 
 class SamiControlRecordParticle(DataParticle):
     """
-    This is for raw Sami PCO2W samples.
+    This is for raw Sami PCO2W control record samples.
     Routines for parsing raw data into a data particle structure. Override
     the building of values, and the rest should come along for free.
     """
@@ -480,15 +517,12 @@ class SamiControlRecordParticle(DataParticle):
 
     def _build_parsed_values(self):
         # Restore the first character we removed for recognition.
-        regex1 = CONTROL_RECORD_REGEX_MATCHER
-        
+        regex1 = CONTROL_RECORD_REGEX_MATCHER        
         match = regex1.match(self.raw_data)
         if not match:
             raise SampleException("No regex match of parsed Record Type4 data: [%s]" % self.raw_data)
 
         result = self._build_particle(match)
-        log.debug("Control Record Decoder End...........")
-
         return(result)
     
     def _build_particle(self, match):
@@ -562,13 +596,13 @@ class SamiControlRecordParticle(DataParticle):
             log.debug("Control Record Format still has to be defined.")
         except Exception, e:
             raise SampleException("Sami Record ValueError decoding checksum %s: [%s]" % (txt,str(e)))
-
+        '''
         log.debug("Control Record Found")
         log.debug("unique_id = " + str(unique_id))
         log.debug("record_length = " + str(record_length))
         log.debug("record type = " + str(record_type))
-        log.debug("record time = " + str(record_time) + " " + txt + " " + SamiConfiguration.make_date_str(record_time))
-
+        log.debug("record time = " + str(record_time) + " " + txt + " " + SamiManager.make_date_str(record_time))
+        '''
         result = [{DataParticleKey.VALUE_ID: SamiControlRecordParticleKey.UNIQUE_ID,
                    DataParticleKey.VALUE: unique_id},
                   {DataParticleKey.VALUE_ID: SamiControlRecordParticleKey.RECORD_LENGTH,
@@ -583,6 +617,9 @@ class SamiControlRecordParticle(DataParticle):
         return result
     
 class SamiDataRecordParticleKey(BaseEnum):
+    """
+    Data Record Data Partical.
+    """
     UNIQUE_ID = 'unique_id'
     RECORD_LENGTH = 'record_length'
     RECORD_TYPE = 'record_type'
@@ -616,10 +653,10 @@ class SamiDataRecordParticle(DataParticle):
         if not match:
             raise SampleException("No regex match of parsed Record Type4 data: [%s]" % self.raw_data)
 
-        result = self._build_particle(match)
+        result = self._build_particle(match, len(self.raw_data))
         return(result)
     
-    def _build_particle(self, match):
+    def _build_particle(self, match,len_raw_data):
         result = {}
         
         unique_id = None
@@ -676,13 +713,20 @@ class SamiDataRecordParticle(DataParticle):
             record_time = int(txt,16)
         except Exception, e:
             raise SampleException("Sami Record ValueError decoding record_time %s: [%s]" % (txt,str(e)))
-
+        '''
         log.debug("unique_id = " + str(unique_id))
         log.debug("record_length = " + str(record_length))
         log.debug("record type = " + str(record_type))
-        log.debug("record time = " + str(record_time) + " " + txt + " " + SamiConfiguration.make_date_str(record_time))
+        log.debug("record time = " + str(record_time) + " " + txt + " " + SamiManager.make_date_str(record_time))
+        '''
         # End: Common Record Information.
                 
+        # Verify length information.
+        # The record length is the number of "2-char" bytes.
+        if((2*record_length) > len_raw_data):
+            log.debug("Sami Record String too small %d/%d" %(len_raw_data, (2*record_length)))
+            return(result)
+        
         # Record Type #4,#5 have a length of 39 bytes, time & trailing checksum.
         if( (record_type == self._DATA_RECORD_TYPE_CO2) | \
             (record_type == self._DATA_RECORD_TYPE_BLANK) ):
@@ -732,14 +776,14 @@ class SamiDataRecordParticle(DataParticle):
             # Compute the checksum for the entire record & compare with data.
             num_bytes = (record_length - 1)
             num_char = 2 * num_bytes
-            cs_calc = calc_crc( self.raw_data[3:3+num_char], num_bytes)
+            cs_calc = SamiManager.calc_crc( self.raw_data[3:3+num_char], num_bytes)
             if(checksum != cs_calc):
                 raise SampleException("Sami Data Record CRC error %s vs [%s]" %(str(hex(cs_calc)),str(hex(checksum))))
-            
+            '''
             log.debug("voltage_battery = " + str(voltage_battery))
             log.debug("thermister_raw = " + str(thermister_raw))
             log.debug("Record Checksup = " + str(hex(checksum)) + " versus " + str(hex(cs_calc)))
-
+            '''
             result = [{DataParticleKey.VALUE_ID: SamiDataRecordParticleKey.UNIQUE_ID,
                        DataParticleKey.VALUE: unique_id},
                       {DataParticleKey.VALUE_ID: SamiDataRecordParticleKey.RECORD_LENGTH,
@@ -761,7 +805,10 @@ class SamiDataRecordParticle(DataParticle):
 
         return result
     
-class SamiConfigDataParticleKey(BaseEnum):   
+class SamiConfigDataParticleKey(BaseEnum):
+    """
+    Configuration String Data Partical.
+    """
     LAUNCH_TIME = 'launch_time'
     START_TIME_OFFSET = 'start_time_offset'
     RECORDING_TIME = 'recording_time'
@@ -1101,7 +1148,7 @@ class SamiConfigDataParticle(DataParticle):
         '''
     
         # Keep the current instrument configuration.
-        if( sami_config.is_valid == False ):
+        if( sami_config.is_valid() is False ):
             sami_config.set_config_str(raw_data)
 
         # Keep updating the new configuration string.
@@ -1116,7 +1163,6 @@ class SamiConfigDataParticle(DataParticle):
         idx = idx + 1
         serial_settings = txt
         
-        log.debug("serial_settings = " + txt)
         # These parameters are not currently used.
         duration_1_txt = match.group(idx)
         idx = idx + 1
@@ -1128,6 +1174,7 @@ class SamiConfigDataParticle(DataParticle):
         log.debug("  ** index = " + str(idx))
 
         '''
+        log.debug("serial_settings = " + serial_settings)
         log.debug("duration1: " + duration_1_txt)
         log.debug("duration2: " + duration_2_txt )
         log.debug("Meaningless parameter: " + unused_txt )
@@ -1245,7 +1292,6 @@ class SamiImmediateStatusDataParticle(DataParticle):
         @throws SampleException If there is a problem with sample creation
         """
         regex1 = IMMEDIATE_STATUS_REGEX_MATCHER
-
         match = regex1.match(self.raw_data)
         if not match:
             raise SampleException("No regex match of parsed status data: [%s]" % self.raw_data)
@@ -1264,14 +1310,14 @@ class SamiImmediateStatusDataParticle(DataParticle):
         external_power_on = bool(status_word & 0x04)
         debug_led  = bool(status_word & 0x10)     
         debug_echo = bool(status_word & 0x20)
-        
+        '''
         log.debug("status_word = " + str(hex(status_word)))
         log.debug("pump_on = " + str(pump_on))
         log.debug("valve_on = " + str(valve_on))
         log.debug("external_power_on = " + str(external_power_on))
         log.debug("debug_led_on  = " + str(debug_led))
         log.debug("debug_echo_on = " + str(debug_echo))
-        
+        '''
         result = [{DataParticleKey.VALUE_ID: SamiImmediateStatusDataParticleKey.PUMP_ON,
                    DataParticleKey.VALUE: pump_on},
                   {DataParticleKey.VALUE_ID: SamiImmediateStatusDataParticleKey.VALVE_ON,
@@ -1381,7 +1427,7 @@ class SamiRegularStatusDataParticle(DataParticle):
             battery_low_measurement = bool(status_word & 0x100)
             battery_low_bank     = bool(status_word & 0x200)
             battery_low_external = bool(status_word & 0x400)
-            
+            '''
             log.debug("elapsed_time_config " + str(time_offset))
             log.debug("clock_active " + str(clock_active))
             log.debug("recording_active " + str(recording_active))
@@ -1392,7 +1438,7 @@ class SamiRegularStatusDataParticle(DataParticle):
             log.debug("flash_memory_open " + str(flash_memory_open))
             log.debug("battery_fatal_error " + str(battery_fatal_error))
             log.debug("battery_low_measurement " + str(battery_low_measurement))
-            
+            '''
             # Or bits together for External fault information (Bit-0 = Dev-1, Bit-1 = Dev-2)
             external_device_fault = 0x0
             if( bool(status_word & 0x0800) == True ):
@@ -1454,16 +1500,6 @@ class InstrumentDriver(SingleConnectionInstrumentDriver):
         """
         #Construct superclass.
         SingleConnectionInstrumentDriver.__init__(self, evt_callback)
-
-    ########################################################################
-    # Superclass overrides for resource query.
-    ########################################################################
-
-#    def get_resource_params(self):
-#        """
-#        Return list of device parameters available.
-#        """
-#        return Parameter.list()
 
     ########################################################################
     # Protocol builder.
@@ -1573,7 +1609,7 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         return_list = []
 
-        log.debug("CJC raw_data: %s" % raw_data )
+        # log.debug("CJC raw_data: %s" % raw_data )
         
         for matcher in sieve_matchers:
             for match in matcher.finditer(raw_data):
@@ -1594,12 +1630,12 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         # Set the sami date/time to the current.
         #tsec = get_timestamp_sec()
-        #sami_timedate_str = SamiConfiguration.make_sami_time_string(tsec)
-        #log.debug(" Todays Sami Time Is " + sami_timedate_str + " = " + SamiConfiguration.make_date_str(tsec) )        
+        #sami_timedate_str = SamiManager.make_sami_time_string(tsec)
+        #log.debug(" Todays Sami Time Is " + sami_timedate_str + " = " + SamiManager.make_date_str(tsec) )        
 
         # Here we will index to the values in the "fixed string".
         # Pointer to the 1st SAMI Driver 4/5 Parameter String.
-        param_index = SAMI_DRIVER_PARAM_INDEX
+        param_index = SamiManager.SAMI_DRIVER_PARAM_INDEX
         
         # Add parameter handlers to parameter dict.
         self._param_dict.add(Parameter.PUMP_PULSE,
@@ -1730,20 +1766,19 @@ class Protocol(CommandResponseInstrumentProtocol):
         return events_out
     
     def get_config(self, *args, **kwargs):
-        """ Get the entire configuration for the instrument
-        
+        """
+        Get the entire configuration for the instrument        
         @param params The parameters and values to set
         @retval None if nothing was done, otherwise result of FSM event handle
         Should be a dict of parameters and values
         @throws InstrumentProtocolException On invalid parameter
         """
         pd = self._param_dict.get_config()
-        log.debug("&&&&&&&&&&&&& _build_param_dict: _param_dict: %s" % pd)
+        log.debug("&&&&&&&&&&&&& get_config: _param_dict: %s" % pd)
 
         result = self._do_cmd_resp(InstrumentCmds.GET_CONFIGURATION, *args, **kwargs)
         if not result:
-            log.debug("*** no result!")
-        log.debug("********** HEre 2")
+            log.debug("*** get_config no result!")
 
         return pd  # CJC This is wrong.
         
@@ -1949,13 +1984,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         # If all params requested, retrieve config.
         if params == DriverParameter.ALL or DriverParameter.ALL in params:
             log.debug("DriverParameter.ALL ******************************************** ")
-            result_vals = {}
-            # result = self._param_dict.get_config()
-            log.debug("DriverParameter.ALL 22222222222222222222222222222222222222222222 ")
-               
             result = self._param_dict.get_config()
-                
-            log.debug("DriverParameter.ALL 33333333333333333333333333333333333333333333 ")
 
         else:
             # If not all params, confirm a list or tuple of params to retrieve.
@@ -1984,8 +2013,6 @@ class Protocol(CommandResponseInstrumentProtocol):
         log.debug("Testing _handler_command_set_configuration")
 
         # Get the current configuration parameters to see if we need to change.                
-        log.debug("********** HEre 1")
-               
         if ((params is None) or (not isinstance(params, dict))):
             raise InstrumentParameterException()
         
@@ -2025,15 +2052,6 @@ class Protocol(CommandResponseInstrumentProtocol):
             except KeyError:
                 raise InstrumentParameterException(('%s is not a valid parameter.' % key))
             
-
-            ## result_vals[key] = self._do_cmd_resp(Command.SET, key, str_val,
-            ##                                     expected_prompt=Prompt.COMMAND,
-            ##                                     write_delay=self.write_delay)
-            
-            # Populate with actual value instead of success flag
-            ## if result_vals[key]:
-            ##    result_vals[key] = name_values[key]
-
         result = result_vals
 
         '''
@@ -2042,9 +2060,7 @@ class Protocol(CommandResponseInstrumentProtocol):
             log.debug("*** no result!")
 		# In 30 seconds should receive message>
 		# Build configuration string and send - this can be done in the build handler.???
-        '''
-        log.debug("********** HEre 2")
-        
+        '''       
         return (next_state, result)
 
     def _handler_command_start_autosample(self):
@@ -2075,8 +2091,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         # if <> by some delta then we must resend configuration to update time.
 #       str_time = get_timestamp_delayed("%M %S %d %H %y %m")
         timestamp_sec = get_timestamp_sec(True)
-#        str_val = self._param_dict.format(Parameter.DEVICE_DATE_TIME, timestamp_sec)
-        if( sami_config.is_valid ):
+        if( sami_config.is_valid() is True ):
             str_val = sami_config.get_time_str(unix_format=True)
         self._do_cmd_resp(InstrumentCmds.SET_REAL_TIME_CLOCK, byte_time, **kwargs)
 
@@ -2336,13 +2351,37 @@ class Protocol(CommandResponseInstrumentProtocol):
     ###################################################################
     # Parsers
     ###################################################################
+    def _find_error(self, response):
+        """
+        Find an error xml message in a response
+        @param response command response string.
+        @return error_no (integer)
+        """
+        error_no = None # no error
+        match = re.search(ERROR_REGEX, response)
+        if(match):
+            txt = match.group(1)
+            try:
+                error_no = int(txt,16)
+            except Exception, e:
+                raise SampleException("Sami _find_error(%s) Fatal: %s" % (txt,str(e)))                
+        return(error_no)
+    
     def _parse_config_response(self, response, prompt):
         """
         Response handler for configuration "L" command
         """
-        log.debug("_parse_config_response " + response)
+        log.debug("CCCCCCCCCCCCCCCCCCCCCCCCCCCCC response = " + response)
         result = None
         
+        # Check for error response
+        error_no = self._find_error(response)
+        if error_no:
+            error_no_str = SamiManager.get_error_str(error_no)
+            log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
+            raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
+        
+        # Process response
         match = CONFIG_REGEX_MATCHER.match(response)
         if match:
 #            SamiConfigDataParticleKey.update(response)
@@ -2361,17 +2400,23 @@ class Protocol(CommandResponseInstrumentProtocol):
         result = None
         log.debug("IIIIIIIIIIIIIIIIIIIIIIIIIIIII response = " + response)
        
+        # Check for error response
+        error_no = self._find_error(response)
+        if error_no:
+            error_no_str = SamiManager.get_error_str(error_no)
+            log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
+            raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
+
+        # Process message
         match = IMMEDIATE_STATUS_REGEX_MATCHER.search(response)
         if match:
+            result = response
             # This response populates a data particle.
-            timestamp = 15
-            if(self._extract_sample(SamiImmediateStatusDataParticle, IMMEDIATE_STATUS_REGEX_MATCHER, response, timestamp)):
+            if(self._extract_sample(SamiImmediateStatusDataParticle, IMMEDIATE_STATUS_REGEX_MATCHER, response, timestamp=None)):
                 log.debug("_parse_I extract_sample success = ==== " + response)
         else:
             log.debug("No Match Found " + response)
 
-        # return the Ds as text
-        result = response
         return result
 
     def _parse_S_response(self, response, prompt): #(self, cmd, *args, **kwargs):
@@ -2379,13 +2424,24 @@ class Protocol(CommandResponseInstrumentProtocol):
         Response handler for Device Status command
         """
         result = None
-        log.debug("Match parse_S_response.... " + response)
-        
+        log.debug("SSSSSSSSSSSSSSSSSSSSSSSSSSSSS response = " + response)
+
+        # Check for error response
+        error_no = self._find_error(response)
+        if error_no:
+            error_no_str = SamiManager.get_error_str(error_no)
+            log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
+            raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
+
         # Verify match is valid.
         match = REGULAR_STATUS_REGEX_MATCHER.match(response)
         if match:
             result = response
             log.debug("     *** Status match found " + result)
+            if(self._extract_sample(SamiRegularStatusDataParticle, REGULAR_STATUS_REGEX_MATCHER, response, timestamp=None)):
+                log.debug("_parse_S extract_sample success = ==== " + response)
+        else:
+            log.debug("No Match Found " + response)
             
         return result
 
@@ -2398,17 +2454,27 @@ class Protocol(CommandResponseInstrumentProtocol):
         @throws InstrumentProtocolException if ts command misunderstood.
         @throws InstrumentSampleException if response did not contain a sample
         """
-        next_state = None
-        next_agent_state = None
         result = None
+        log.debug("RRRRRRRRRRRRRRRRRRRRRRRRRRRRR response = " + response)
 
-        if prompt != Prompt.COMMAND:
-            raise InstrumentProtocolException('Command R not recognized: %s', response)
+        # Check for error response
+        error_no = self._find_error(response)
+        if error_no:
+            error_no_str = SamiManager.get_error_str(error_no)
+            log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
+            raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
 
-        # Extract the sample.
-        log.debug(">>>>>>>>>>> Decode R response please = " + response)
-
-        log.debug("_parse_R_response RETURNING RESULT=" + str(result))
+        # Verify match is valid.
+        match = DATA_RECORD_REGEX_MATCHER.match(response)
+        if match:
+            result = response
+            if(self._extract_sample(SamiDataRecordDataParticle, DATA_RECORD_REGEX_MATCHER, response, timestamp=None)):
+                log.debug("_parse_S extract_sample success = ==== " + response)
+            log.debug("     *** Status match found " + result)
+        else:
+            log.debug("No Match Found " + response)
+            
+        # Process message
         return result
     
     ########################################################################
@@ -2436,7 +2502,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         new_config = self._param_dict.get_config()
 
         update_required = False
-        if( (sami_config_new_str is not None) and (sami_config.is_valid is True) ):
+        if( (sami_config_new_str is not None) and (sami_config.is_valid() is True) ):
             if( sami_config_new_str[0:232] != sami_config.config_str[0:232] ):
                 update_required = True
 
@@ -2467,7 +2533,6 @@ class Protocol(CommandResponseInstrumentProtocol):
     @staticmethod
     def _decode_switch_bit(input, bit_offset, pos):
         r = False
-        log.debug("decode_switch_bit " + input)
         if( not input ):
             log.debug("not input found")
         elif( input == "" ):
@@ -2484,13 +2549,11 @@ class Protocol(CommandResponseInstrumentProtocol):
                     raise SampleException("Sami _decode_switch_bit(%s) Fatal: %s" % (txt,str(e)))
                 else:
                     iBitValue = (1 << bit_offset)
-                    log.debug("input length = " + str(len_input) + " " + s + " " + str(iBitValue))
                     r = bool(val & iBitValue)
         return( r)
     
     @staticmethod
     def _decode_switch_bit_invert(input, bit_offset, pos):
-        log.debug("decode_switch_bit " + input)
         return( Protocol._decode_switch_bit(input, bit_offset, pos) == False)
 
     @staticmethod
@@ -2501,7 +2564,6 @@ class Protocol(CommandResponseInstrumentProtocol):
     def _string_to_int(v):
         try:
             r = int(v,16)
-            log.debug("DDDDDDDDDDDDDDDDDD _string_to_int " + v + " " + str(hex(r)))
         except Exception, e:
             raise SampleException("Sami _string_to_int(%s) Fatal: %s" % (txt,str(e)))
         return r
@@ -2587,27 +2649,4 @@ class Protocol(CommandResponseInstrumentProtocol):
             log.debug("Inside _int32_to_string() 2 " + str(value))
             msg = '{:08X}'.format(value)
             return(msg)
-        
-    # Convert a time string into Epoc Seconds.
-    def convert_timestamp_to_sec(time_str):
-        '''
-        Convert a time string of the format dd-mm-yyyy hr:mn:sec to seconds since 1970.
-        '''
-        sec = 0;
-        timestamp_regex = re.compile(r"(\d\d)-(\d\d)-(\d\d\d\d) (\d\d):(\d\d):(\d\d)")
-        match = timestamp_regex.match(time_str)
-        if( match ):
-            dd = match.group(1)
-            mm = match.group(2)
-            yy = match.group(3)
-            hr = match.group(4)
-            mn = match.group(5)
-            ss = match.group(6)
-            
-            # month_mapping: a mapping for 3 letter months to integers
-            d1 = datetime.datetime(int(yy), int(mm), int(dd), int(hr), int(mn), int(ss))
-            d1_tuple = d1.timetuple()
-            secondsF = calendar.timegm(d1_tuple)
-            sec = int(secondsF)
-        return(sec)
 # End of File
