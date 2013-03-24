@@ -82,6 +82,7 @@ SAMI_DEFAULT_CONFIG = "CAB39E84000000F401E13380570007080401000258030A00025800170
 # Program Declarations
 ###############################################################################   
 # A new string being built but not yet sent to Sami Instrument.
+# Globalize here because it is used by both DataParticles and Parameters.
 sami_config_new_str = None
 sami_config_new_valid = False  # Make true when new_str complete.
 
@@ -148,7 +149,7 @@ def replace_string_chars(s1, pos, s2):
 ###############################################################################
 # General Class Definitions
 ###############################################################################   
-class SamiManager():
+class SamiConfiguration():
     """
     Sami PCO2W Configuration String Management Class.
     This class is to contain data to manage the Sami Configuration String field formats
@@ -156,6 +157,8 @@ class SamiManager():
     SAMI_DRIVER_PARAM_INDEX = 78  # String index of SAMI-CO2 Driver 4/5 Parameters.
     _MIN_CONFIG_STR_LENGTH = 132
     
+    # This configuration string is sent to and received from the Sami Instrument.
+    # It is used to identify configuration parameters.
     _config_str = None
     _config_valid = False
     
@@ -166,14 +169,9 @@ class SamiManager():
     _max_time_sec_1904 = 0x0
   
     def __init__(self):
-        self._initialize_params()
-
-    def _initialize_params(self):
         self._config_str = "Not Initialized"
         self._config_valid = False
-        self._init_time_range()
 
-    def _init_time_range(self):
         # Set a time range of allow Confuguration time update.
         # Default earliest time to PDF text book Oct 6, 2011 18:05:56
         t = datetime.datetime(2011, 10, 6, 0, 0)
@@ -245,7 +243,7 @@ class SamiManager():
             log.debug("max_time = " + str(self._max_time_sec_1970))
             log.debug("Time too late %d/%d" %(time_sec_1970, self._max_time_sec_1970) )           
         else:
-            sami_time_txt = SamiManager.make_sami_time_string(time_sec_1970)
+            sami_time_txt = SamiConfiguration.make_sami_time_string(time_sec_1970)
             self._config_str = sami_time_txt + self._config_str[8:232]
             r = True
         return(r)
@@ -283,9 +281,9 @@ class SamiManager():
             return(False)
         
         # Sami says these values are always this.    
-        txt = SamiManager.vb_mid(s,33,2)
+        txt = SamiConfiguration.vb_mid(s,33,2)
         dev_id = int(txt,16)
-        txt = SamiManager.vb_mid(s,35,2)
+        txt = SamiConfiguration.vb_mid(s,35,2)
         param_ptr = int(txt,16)
         if( (dev_id > 16) | (param_ptr > 100) ):
             log.debug("Configuration is corrupted or erased! " + str(hex(dev_id)) + " " + str(hex(param_ptr)) )
@@ -349,7 +347,7 @@ class SamiManager():
     def vb_mid(s, start, length):
         """
         Basic-Programming mid() function utility.
-        Function to extract middle of string (used to be compatible with Sunbeam SW Logic).
+        Function to extract middle of string (used to be compatible with Sami Sunbeam SW Logic).
         @param: s - Input string
         @param: start - Start Index
         @param: length - Desired string extraction length.
@@ -483,8 +481,8 @@ class Prompt(BaseEnum):
 ###############################################################################
 # Global Declaration - Sami Configuration
 ###############################################################################   
-sami_config = SamiManager()
-sami_config.set_config_str(SAMI_DEFAULT_CONFIG)
+# Manage Sami Instrument Configurations
+sami_config = SamiConfiguration()
 
 ###############################################################################
 # Data Particles
@@ -601,7 +599,7 @@ class SamiControlRecordParticle(DataParticle):
         log.debug("unique_id = " + str(unique_id))
         log.debug("record_length = " + str(record_length))
         log.debug("record type = " + str(record_type))
-        log.debug("record time = " + str(record_time) + " " + txt + " " + SamiManager.make_date_str(record_time))
+        log.debug("record time = " + str(record_time) + " " + txt + " " + SamiConfiguration.make_date_str(record_time))
         '''
         result = [{DataParticleKey.VALUE_ID: SamiControlRecordParticleKey.UNIQUE_ID,
                    DataParticleKey.VALUE: unique_id},
@@ -717,7 +715,7 @@ class SamiDataRecordParticle(DataParticle):
         log.debug("unique_id = " + str(unique_id))
         log.debug("record_length = " + str(record_length))
         log.debug("record type = " + str(record_type))
-        log.debug("record time = " + str(record_time) + " " + txt + " " + SamiManager.make_date_str(record_time))
+        log.debug("record time = " + str(record_time) + " " + txt + " " + SamiConfiguration.make_date_str(record_time))
         '''
         # End: Common Record Information.
                 
@@ -776,7 +774,7 @@ class SamiDataRecordParticle(DataParticle):
             # Compute the checksum for the entire record & compare with data.
             num_bytes = (record_length - 1)
             num_char = 2 * num_bytes
-            cs_calc = SamiManager.calc_crc( self.raw_data[3:3+num_char], num_bytes)
+            cs_calc = SamiConfiguration.calc_crc( self.raw_data[3:3+num_char], num_bytes)
             if(checksum != cs_calc):
                 raise SampleException("Sami Data Record CRC error %s vs [%s]" %(str(hex(cs_calc)),str(hex(checksum))))
             '''
@@ -1154,7 +1152,7 @@ class SamiConfigDataParticle(DataParticle):
         # Keep updating the new configuration string.
         sami_config_new_str = raw_data
         '''
-        log.debug("Sys Config: " + sami_config.config_str)
+        log.debug("Sys Config: " + sami_config.get_config_str())
         log.debug("New Config: " + sami_config_new_str)
         '''
     
@@ -1528,11 +1526,7 @@ class Protocol(CommandResponseInstrumentProtocol):
     '''
     global sami_config_new_str
     global sami_config_new_valid
-    
-    # Create a configuration string when the values are built.
-    sami_config_new_str = ""
-    sami_config_new_valid = False
-    
+      
     def __init__(self, prompts, newline, driver_event):
         """
         Protocol constructor.
@@ -1589,6 +1583,13 @@ class Protocol(CommandResponseInstrumentProtocol):
         # State state machine in UNKNOWN state.
         self._protocol_fsm.start(ProtocolState.UNKNOWN)
 
+        # Define a method to manage Sami Configuration updates. Sami Instrument Configurations
+        # should be kept to a minimum.
+        
+        # Initialize configuration settings at startup.
+        sami_config_new_str = None
+        sami_config_new_valid = False
+    
         # commands sent sent to device to be filtered in responses for telnet DA
         self._sent_cmds = []
 
@@ -1630,12 +1631,12 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         # Set the sami date/time to the current.
         #tsec = get_timestamp_sec()
-        #sami_timedate_str = SamiManager.make_sami_time_string(tsec)
-        #log.debug(" Todays Sami Time Is " + sami_timedate_str + " = " + SamiManager.make_date_str(tsec) )        
+        #sami_timedate_str = SamiConfiguration.make_sami_time_string(tsec)
+        #log.debug(" Todays Sami Time Is " + sami_timedate_str + " = " + SamiConfiguration.make_date_str(tsec) )        
 
         # Here we will index to the values in the "fixed string".
         # Pointer to the 1st SAMI Driver 4/5 Parameter String.
-        param_index = SamiManager.SAMI_DRIVER_PARAM_INDEX
+        param_index = SamiConfiguration.SAMI_DRIVER_PARAM_INDEX
         
         # Add parameter handlers to parameter dict.
         self._param_dict.add(Parameter.PUMP_PULSE,
@@ -1823,7 +1824,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         next_agent_state = ResourceAgentState.IDLE
         
         # Since we are just starting clear out any configuration information being built.
-        sami_config_new_str = ""
+        sami_config_new_str = None
         sami_config_new_valid = False
         
         # Make sure automatic-status update is off
@@ -2377,7 +2378,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         # Check for error response
         error_no = self._find_error(response)
         if error_no:
-            error_no_str = SamiManager.get_error_str(error_no)
+            error_no_str = SamiConfiguration.get_error_str(error_no)
             log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
             raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
         
@@ -2403,7 +2404,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         # Check for error response
         error_no = self._find_error(response)
         if error_no:
-            error_no_str = SamiManager.get_error_str(error_no)
+            error_no_str = SamiConfiguration.get_error_str(error_no)
             log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
             raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
 
@@ -2429,7 +2430,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         # Check for error response
         error_no = self._find_error(response)
         if error_no:
-            error_no_str = SamiManager.get_error_str(error_no)
+            error_no_str = SamiConfiguration.get_error_str(error_no)
             log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
             raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
 
@@ -2460,7 +2461,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         # Check for error response
         error_no = self._find_error(response)
         if error_no:
-            error_no_str = SamiManager.get_error_str(error_no)
+            error_no_str = SamiConfiguration.get_error_str(error_no)
             log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
             raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
 
@@ -2496,14 +2497,14 @@ class Protocol(CommandResponseInstrumentProtocol):
         global sami_config_new_str
         log.debug("_update_params() - Updating parameter dict")
         
-        # H
         # Get all the key values.
         old_config = self._param_dict.get_config()
         new_config = self._param_dict.get_config()
 
         update_required = False
         if( (sami_config_new_str is not None) and (sami_config.is_valid() is True) ):
-            if( sami_config_new_str[0:232] != sami_config.config_str[0:232] ):
+            sami_config_str = sami_config.get_config_str()
+            if( sami_config_new_str[0:232] != sami_config_str[0:232] ):
                 update_required = True
 
         if( update_required == True ):
