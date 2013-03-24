@@ -79,7 +79,7 @@ from mi.instrument.sami.pco2w.cgsn.driver import get_timestamp_delayed_sec  # Mo
 from mi.instrument.sami.pco2w.cgsn.driver import get_timestamp_sec  # Modified 
 from mi.instrument.sami.pco2w.cgsn.driver import convert_timestamp_to_sec
 from mi.instrument.sami.pco2w.cgsn.driver import replace_string_chars
-from mi.instrument.sami.pco2w.cgsn.driver import SamiManager
+from mi.instrument.sami.pco2w.cgsn.driver import SamiConfiguration
 
 # Data Particles
 from mi.instrument.sami.pco2w.cgsn.driver import SamiImmediateStatusDataParticleKey
@@ -549,7 +549,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         self.assert_driver_parameters(pd, True)
 
         # Define the index of the SAMI-CO2 Driver 4/5 Parameters.
-        param_index = SamiManager.SAMI_DRIVER_PARAM_INDEX
+        param_index = SamiConfiguration.SAMI_DRIVER_PARAM_INDEX
         
         # Replace Pump Pulse (Driver-4 parameter first 2 characters).
         source = replace_string_chars(source, param_index, "1120FFA8181C010038")
@@ -656,20 +656,20 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         Test the custom utility functions
         """       
         log.debug("Testing Error Handling")
-        error_txt = SamiManager.get_error_str( 0xA )
+        error_txt = SamiConfiguration.get_error_str( 0xA )
         self.assertEqual(error_txt, "Flash is Not Open")
-        error_txt = SamiManager.get_error_str(-1)
+        error_txt = SamiConfiguration.get_error_str(-1)
         self.assertEqual(error_txt, None)
-        error_txt = SamiManager.get_error_str(0x100)
+        error_txt = SamiConfiguration.get_error_str(0x100)
         self.assertEqual(error_txt, None)
         
         log.debug("Testing vb_mid() Utility")
         s1 = "1234567890"
-        s2 = SamiManager.vb_mid(s1, 2, 2)
+        s2 = SamiConfiguration.vb_mid(s1, 2, 2)
         self.assertEqual(s2, "23")
         
         # Test past the end of the string.
-        s2 = SamiManager.vb_mid(s1, 10, 2)
+        s2 = SamiConfiguration.vb_mid(s1, 10, 2)
         self.assertEqual(s2, "0")
         
         log.debug("Testing replace_string_chars() utility")
@@ -690,7 +690,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         
         log.debug("Testing checksum utility")
         s1 = "0000"
-        cs = SamiManager.calc_crc(s1, 2)
+        cs = SamiConfiguration.calc_crc(s1, 2)
         self.assertEqual(cs, 0x00)
         
         # This is a known CRC test
@@ -699,12 +699,12 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         num_bytes = (record_length - 1)
         num_char = 2 * num_bytes
         # Sami says throw away the 1st 3 characters.
-        cs_calc = SamiManager.calc_crc( record[3:3+num_char], num_bytes)
+        cs_calc = SamiConfiguration.calc_crc( record[3:3+num_char], num_bytes)
         self.assertEqual(cs_calc, 0x3B)
         
         # Use our trusted replace-string function to corrupt a byte.
         record = replace_string_chars(record, 10, "FFF")
-        cs_calc = SamiManager.calc_crc( record[3:3+num_char], num_bytes)
+        cs_calc = SamiConfiguration.calc_crc( record[3:3+num_char], num_bytes)
         self.assertNotEqual(cs_calc, 0x3B)       
 
         log.debug("Testing time utilities")
@@ -726,7 +726,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         """
         Test the custom configuration string management tool.
         """
-        sami_config = SamiManager()
+        sami_config = SamiConfiguration()
         r = sami_config.set_config_str( SAMPLE_CONFIG_DATA_1 )
         if( not r ):
             log.debug("Invalid configuration setting")
