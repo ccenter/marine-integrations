@@ -106,7 +106,7 @@ from mi.core.instrument.data_particle import DataParticleKey, DataParticleValue
 SAMPLE_IMMEDIATE_STATUS_DATA = "10"
 SAMPLE_ERROR_DATA = "?03" + NEWLINE
 # This records is from the PCO2W_Record_Format.pdf file.
-SAMPLE_CONTROL_RECORD = "*5B2780C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B"
+SAMPLE_CONTROL_RECORD = "*D21285CCB0F0A500410000460000000008B3EA"  # Provided by Mike at WHOI.
 SAMPLE_DATA_RECORD_1  = "*5B2704C8EF9FC90FE606400FE8063C0FE30674640B1B1F0FE6065A0FE9067F0FE306A60CDE0FFF3B" # Also used in crc-test so please do not change.
 SAMPLE_DATA_RECORD_2  = "*7E2705CBACEE7F007D007D0B2A00BF080500E00187034A008200790B2D00BE080600DE0C1406C98C"
 SAMPLE_DATA_RECORD_3  = "*F72705CD73EB6B005500850A42067807FB06C226513416005300870A40067807FE06C00C88066961"
@@ -215,11 +215,11 @@ class DataParticleMixin(DriverTestMixin):
     }
     
     _control_record_parameters = {   
-        SamiControlRecordParticleKey.UNIQUE_ID:     { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 91, REQUIRED: True},
-        SamiControlRecordParticleKey.RECORD_LENGTH: { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 39, REQUIRED: True},
-        SamiControlRecordParticleKey.RECORD_TYPE:   { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x80,  REQUIRED: True},
-        SamiControlRecordParticleKey.RECORD_TIME:   { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0xC8EF9FC9, REQUIRED: True},
-        SamiControlRecordParticleKey.CHECKSUM:      { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x0, REQUIRED: True},
+        SamiControlRecordParticleKey.UNIQUE_ID:     { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0xD2, REQUIRED: True},
+        SamiControlRecordParticleKey.RECORD_LENGTH: { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x12, REQUIRED: True},
+        SamiControlRecordParticleKey.RECORD_TYPE:   { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0x85,  REQUIRED: True},
+        SamiControlRecordParticleKey.RECORD_TIME:   { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0xCCB0F0A5, REQUIRED: True},
+        SamiControlRecordParticleKey.CHECKSUM:      { TYPE: int, READONLY: False, DA: False, DEFAULT: 0x0, VALUE: 0xEA, REQUIRED: True},
     }
    
     # Test results that get decoded from the string sent to the chunker.
@@ -380,26 +380,6 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
     #    attributes for correctness.
     ###
     
-    def reset_test_vars(self):    
-        self.raw_stream_received = False
-        self.parsed_stream_received = False
-
-    def mock_event_callback(self, event):
-        event_type = event['type']
-        print str(event)
-        
-        if event_type == DriverAsyncEvent.SAMPLE:
-            sample_value = event['value']
-            log.debug("event_type == SAMPLE")
-            particle_dict = json.loads(sample_value)
-            stream_type = particle_dict['stream_name']        
-            if stream_type == 'raw':
-                log.debug("raw_stream received")
-                self.raw_stream_received = True
-            elif stream_type == 'parsed':
-                log.debug("rstream type == parsed")
-                self.parsed_stream_received = True
-
     def test_driver_enums(self):
         """
         Verify that all driver enumeration has no duplicate values that might cause confusion.  Also
@@ -429,7 +409,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         Test the chunker and verify the particles created.
         """
         chunker = StringChunker(Protocol.sieve_function)
-
+        
         test_data = SAMPLE_DATA_RECORD_1      
         self.assert_chunker_sample(chunker, test_data)
         self.assert_chunker_sample_with_noise(chunker, test_data)
@@ -453,9 +433,8 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         self.assert_chunker_sample_with_noise(chunker, test_data)
         self.assert_chunker_fragmented_sample(chunker, test_data)
         self.assert_chunker_combined_sample(chunker, test_data)
-        
         # Note: Immediate status data particle updated in parse_I_command().
-        
+
     def test_got_data(self):
         """
         Verify sample data passed through the got data method produces the correct data particles
@@ -833,6 +812,10 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DriverTestMixin):
         # Test that the driver protocol is in state command.
         self.check_state(ProtocolState.COMMAND)
         
+    def test_set(self):
+        self.assert_initialize_driver()
+        self.assert_set(Parameter.PUMP_PULSE, 0x16)
+        
     def test_startup_configuration(self):
         '''
         Test that the startup configuration is applied correctly
@@ -851,7 +834,7 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DriverTestMixin):
 #            Parameter.USER_INFO : "KILROY WAZ HERE"
         }
         reply = self.driver_client.cmd_dvr('set_resource', params)
-        self.assertEqual(reply, None)
+        self.assertEqual(reply, {Parameter.PUMP_PULSE: 16})
         
     def test_parameters(self):
         """
@@ -863,6 +846,10 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DriverTestMixin):
         reply = self.driver_client.cmd_dvr('get_resource', Parameter.ALL)
         # CJC: Cannot find this. self.assert_driver_parameters(reply, True)
     
+    def test_commands(self):
+        self.put_instrument_in_command_mode()
+        self.assert_driver_command(ProtocolEvent.ACQUIRE_STATUS)
+                
     def test_set(self):       
         self.put_instrument_in_command_mode()
         
@@ -885,41 +872,20 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DriverTestMixin):
         self.assert_set(Parameter.PUMP_PULSE, 0x00)
         self.assert_get(Parameter.PUMP_PULSE, 0x16)
 
-    def test_get(self):        
+    def test_get(self):
+        
         self.put_instrument_in_command_mode()
 
-        new_params = {
-                   Parameter.PUMP_PULSE: 0xFF,
-                   Parameter.PUMP_ON_TO_MEASURE: 0xEE
+        params = {
+                   Parameter.PUMP_PULSE: 16,
+                   Parameter.PUMP_ON_TO_MEASURE: 32
         }
-        
-        reply = self.driver_client.cmd_dvr('set_resource', new_params)
-        self.assertEquals(reply, new_params)
 
-        # Retrieve all of the parameters.
-        '''
-        reply = self.driver_client.cmd_dvr('get_resource', Parameter.ALL)
-        self.assert_param_dict(reply)
-        '''
+        reply = self.driver_client.cmd_dvr('get_resource',
+                                           params.keys(),
+                                           timeout=20)
         
-        '''
-        CJC: DO we need to add these ???
-        self.assertRaises(InstrumentCommandException,
-                          self.driver_client.cmd_dvr,
-                          'bogus', [Parameter.PUMP_PULSE])
-
-        # Assert get fails without a paramet
-        self.assertRaises(InstrumentParameterException,
-                          self.driver_client.cmd_dvr, 'get_resource')
-                    
-        # Assert get fails with a bad parameter in a list).
-        with self.assertRaises(InstrumentParameterException):
-            bogus_params = [
-                'a bogus parameter name',
-                Parameter.PUMP_PULSE
-                ]
-            self.driver_client.cmd_dvr('get_resource', bogus_params)
-        '''
+        self.assertEquals(reply, params)
         
     def test_apply_startup_params(self):
         """
