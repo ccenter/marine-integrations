@@ -527,7 +527,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         self.assert_driver_parameters(pd, True)
 
         # Define the index of the SAMI-CO2 Driver 4/5 Parameters.
-        param_index = SamiConfiguration.SAMI_DRIVER_PARAM_INDEX
+        param_index = SamiConfiguration._SAMI_DRIVER_PARAM_INDEX
         
         # Replace Pump Pulse (Driver-4 parameter first 2 characters).
         source = replace_string_chars(source, param_index, "1120FFA8181C010038")
@@ -699,7 +699,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         log.debug("tsec = " + str(tsec))
         tsec = get_timestamp_delayed_sec()
         log.debug("tsec = " + str(tsec))
-
+        
     def test_config_tool(self):
         """
         Test the custom configuration string management tool.
@@ -709,7 +709,20 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
         if( not r ):
             log.debug("Invalid configuration setting")
             
+        # This test is used to verify the comparision utility.
+        r2 = SAMPLE_CONFIG_DATA_2   # different
+        r = sami_config.compare(r2)
+        self.assertEqual(r, False)
+            
+        r2 = SAMPLE_CONFIG_DATA_1   # equal
+        r = sami_config.compare(r2)
+        self.assertEqual(r, True)
+        
+        r = sami_config.compare("") # invalid
+        self.assertEqual(r, None)
+        
         # Set the time to the current time
+        sami_config.set_config_str( SAMPLE_CONFIG_DATA_1 )
         tnow_sec_F = time.time()   # Currentonds since Epoch
         tnow_sec = int(tnow_sec_F)
         r = sami_config.set_config_time(tnow_sec)
@@ -749,7 +762,7 @@ class SamiUnitTest(InstrumentDriverUnitTestCase, DataParticleMixin):
 #     and common for all drivers (minimum requirement for ION ingestion)      #
 ###############################################################################
 @attr('INT', group='mi')
-class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DriverTestMixin):
+class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DataParticleMixin):
     def setUp(self):
         InstrumentDriverIntegrationTestCase.setUp(self)
 
@@ -760,31 +773,6 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DriverTestMixin):
     ###
     #    Add instrument specific integration tests
     ###
-
-    def assert_param_dict(self, pd, all_params=False):
-        """
-        Verify all device parameters exist and are correct type.
-        """
-
-        # Make it loop through once to warn with debugging of issues, 2nd time can send the exception
-        # PARAMS is the master type list
-
-        if all_params:
-            log.debug("DICT 1 *********" + str(pd.keys()))
-            log.debug("DICT 2 *********" + str(PARAMS.keys()))
-            self.assertEqual(set(pd.keys()), set(PARAMS.keys()))
-
-            for (key, type_val) in PARAMS.iteritems():
-                self.assertTrue(isinstance(pd[key], type_val))
-        else:
-            for (key, val) in pd.iteritems():
-                self.assertTrue(PARAMS.has_key(key))
-
-                if val is not None: # If its not defined, lets just skip it, only catch wrong type assignments.
-                    log.debug("Asserting that " + key +  " is of type " + str(PARAMS[key]))
-                    self.assertTrue(isinstance(val, PARAMS[key]))
-                else:
-                    log.debug("*** Skipping " + key + " Because value is None ***")
 
     def put_instrument_in_command_mode(self):
         """Wrap the steps and asserts for going into command mode.
@@ -813,7 +801,23 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DriverTestMixin):
         
     def test_set(self):
         self.assert_initialize_driver()
-        self.assert_set(Parameter.PUMP_PULSE, "16")
+        """
+        Test all set commands. Verify all exception cases.
+        """
+        self.assert_initialize_driver()
+
+        # Verify we can set the clock
+        # self.assert_set_clock(Parameter.DATE_TIME, tolerance=5)
+
+        # Verify we can set all parameters in bulk
+        new_values = {
+            Parameter.PUMP_PULSE: 16,
+            Parameter.PUMP_ON_TO_MEASURE: 10,
+            Parameter.NUM_CYCLES_BETWEEN_BLANKS: 1
+        }
+        self.assert_set_bulk(new_values)
+
+        self.assert_set_exception(Parameter.PUMP_PULSE, 'bad')
         
     def test_startup_configuration(self):
         '''
@@ -843,11 +847,12 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DriverTestMixin):
         """
         self.assert_initialize_driver()
         reply = self.driver_client.cmd_dvr('get_resource', Parameter.ALL)
-        # CJC: Cannot find this. self.assert_driver_parameters(reply, True)
+        self.assert_driver_parameters(reply, True)
     
     def test_commands(self):
         self.put_instrument_in_command_mode()
         self.assert_driver_command(ProtocolEvent.ACQUIRE_STATUS)
+        self.assert_driver_command(ProtocolEvent.ACQUIRE_SAMPLE)
                 
     def test_set(self):       
         self.put_instrument_in_command_mode()
@@ -867,11 +872,55 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DriverTestMixin):
         """
         Test all set commands. Verify all exception cases.
         """
-        self.assert_initialize_driver()   
-        self.assert_set(Parameter.PUMP_PULSE, 0x00)
-        self.assert_get(Parameter.PUMP_PULSE, 0x16)
+#        self.assert_initialize_driver()   
+        self.put_instrument_in_command_mode()
+        self.assert_set(Parameter.PUMP_PULSE, 0xFF, no_get=True)
+        self.assert_get(Parameter.PUMP_PULSE, 0xFF)
 
     def test_get(self):
+        self.put_instrument_in_command_mode()
+
+        #
+        # Test the full list of parameters.        
+        #
+        params = {
+                   Parameter.PUMP_PULSE: 16,
+                   Parameter.PUMP_ON_TO_MEASURE: 32,
+                   Parameter.NUM_SAMPLES_PER_MEASURE: 255,
+                   Parameter.NUM_CYCLES_BETWEEN_BLANKS: 168,
+                   Parameter.NUM_REAGENT_CYCLES: 24,
+                   Parameter.NUM_BLANK_CYCLES: 28,
+                   Parameter.FLUSH_PUMP_INTERVAL_SEC: 0x1,
+                   Parameter.STARTUP_BLANK_FLUSH_ENABLE: True,
+                   Parameter.PUMP_PULSE_POST_MEASURE_ENABLE: False,
+                   Parameter.NUM_EXTRA_PUMP_PULSE_CYCLES: 56
+        }
+
+        reply = self.driver_client.cmd_dvr('get_resource',
+                                           params.keys(),
+                                           timeout=20)
+        self.assertEquals(reply, params)
+
+        #
+        # Test a partial list of parameters.
+        #
+        params = {
+                   Parameter.PUMP_PULSE: 16,
+                   Parameter.PUMP_ON_TO_MEASURE: 32
+        }
+
+        reply = self.driver_client.cmd_dvr('get_resource',
+                                           params.keys(),
+                                           timeout=20)
+        
+        self.assertEquals(reply, params)
+
+        #
+        # Test a single set update.
+        #
+        self.assert_get(Parameter.PUMP_PULSE, 16)
+        
+    def test_get_cjc(self):
         
         self.put_instrument_in_command_mode()
 
@@ -904,7 +953,7 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DriverTestMixin):
 
         # All done.  Verify the startup parameter has been reset
         self.assert_driver_command(ProtocolEvent.STOP_AUTOSAMPLE, state=ProtocolState.COMMAND)
-        self.assert_get(Parameter.PUMP_PULSE, 16)
+        self.assert_get(Parameter.PUMP_PULSE, 15)
         
 ###############################################################################
 #                            QUALIFICATION TESTS                              #
