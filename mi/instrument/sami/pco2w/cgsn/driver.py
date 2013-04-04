@@ -22,6 +22,7 @@ import datetime
 import calendar
 import sys      # Exceptions
 import copy
+from threading import RLock
 
 from mi.core.log import get_logger; log = get_logger()
 
@@ -40,7 +41,7 @@ from mi.core.exceptions import SampleException
 from mi.core.exceptions import InstrumentProtocolException
 from mi.core.exceptions import InstrumentParameterException
 from mi.core.instrument.protocol_param_dict import ParameterDictVisibility
-from mi.core.instrument.protocol_param_dict import FunctionParamDictVal
+from mi.core.instrument.protocol_param_dict import FunctionParameter
 from mi.core.instrument.data_particle import DataParticle
 from mi.core.instrument.data_particle import DataParticleKey
 from mi.core.instrument.data_particle import CommonDataParticleType
@@ -153,9 +154,31 @@ class SamiConfiguration():
     Sami PCO2W Configuration String Management Class.
     This class is to contain data to manage the Sami Configuration String field formats
     Sami Fields are fixed in position.    """
-    SAMI_DRIVER_PARAM_INDEX = 78  # String index of SAMI-CO2 Driver 4/5 Parameters.
+    _SAMI_DRIVER_PARAM_INDEX = 78  # String index of SAMI-CO2 Driver 4/5 Parameters.   
     _MIN_CONFIG_STR_LENGTH = 132
     
+    # Record types are Control or Data.
+    # Data Records: 0x0 - 0x7F
+    _DATA_RECORD_RANGE_MIN = 0x00
+    _DATA_RECORD_RANGE_MAX = 0x7F
+
+    _DATA_RECORD_TYPE_PH = 0xA  # Not being used right now.
+    _DATA_RECORD_TYPE_CO2 = 0x4
+    _DATA_RECORD_TYPE_BLANK = 0x5
+
+    # Control Records: 0x80 - 0xFE 
+    _CTRL_RECORD_RANGE_MIN = 0x80
+    _CTRL_RECORD_RANGE_MAX = 0xFF
+    
+    _CTRL_RECORD_TYPE_LAUNCH = 0x80  # Launch - The program started executing, possibly waiting for measurement
+    _CTRL_RECORD_TYPE_START = 0x81  # Start - The measurement sequence has started.
+    _CTRL_RECORD_TYPE_SHUTDOWN = 0x83 # Good Shutdown.
+    _CTRL_RECORD_TYPE_RTS_ENABLE = 0x85  # RTS Handshake is on.
+    _CTRL_RECORD_TYPE_GENERIC_EXTERNAL = 0xFF    # Generic External
+       
+    # A lock should eliminate concerns about multi-threaded access.
+    _lock = None
+
     # This configuration string is sent to and received from the Sami Instrument.
     # It is used to identify configuration parameters.
     _config_str = None
@@ -168,6 +191,7 @@ class SamiConfiguration():
     _max_time_sec_1904 = 0x0
   
     def __init__(self):
+        self._lock = RLock()
         self._config_str = None
         self._config_valid = False
 
@@ -183,8 +207,9 @@ class SamiConfiguration():
         
         # Set a maximum time as current time + 30 days.
         sec_per_day = 3600 * 24
+        sec_per_year = 365 * sec_per_day  # good approximation.
         tnow_secF = time.time()   # Current seconds since Epoch
-        self._max_time_sec_1970 = int(tnow_secF) + (90 * sec_per_day)
+        self._max_time_sec_1970 = int(tnow_secF) + (5 * sec_per_year)
         self._max_time_sec_1904 = self._max_time_sec_1970 + NSECONDS_1904_TO_1970
         
     def clear(self):
@@ -196,6 +221,22 @@ class SamiConfiguration():
         for i in range(0, 232):
             self._config_str += "0"
 
+    def compare(self, new_config_str):
+        """
+        Compare a new configuration string against the current.
+        @param new_config_str: Sami Instrument Configuration string to check.
+        @return: True=Same;None=Invalid;False=Different
+        """
+        r = None
+        min_len = self._MIN_CONFIG_STR_LENGTH
+        if((new_config_str != None) & (len(new_config_str) >= min_len)):
+            if(self._config_valid is True):
+                if( self._config_str[0:min_len] == new_config_str[0:min_len]):
+                    r = True
+                else:
+                    r = False
+        return(r)
+    
     def get_config_str(self):
         """
         Get the current configuration string (should have been updated from instrument).
@@ -215,6 +256,20 @@ class SamiConfiguration():
             time_txt = '{:08X}'.format(time_sec)
         return(time_txt)
 
+    def get_start_time(self, unix_fmt=False):
+        log.debug("get_start_time...................")
+        launch_time_txt = self._config_str[0:8]
+        start_offset_txt = self._config_str[8:16]
+        
+        launch_time = int(launch_time_txt,16)
+        start_offset = int(start_offset_txt,16)
+        
+        start_time = launch_time + start_offset
+        log.debug("start_time = " + str(hex(start_time)))
+        if(unix_fmt is True):
+            start_time -= NSECONDS_1904_TO_1970
+        return(start_time)
+        
     def is_valid(self):
         """
         Determine if a valid configuration string has been created/read
@@ -230,9 +285,10 @@ class SamiConfiguration():
         """
         r = False
         if (self._verify_config(s) is True):
-            self._config_str = s[0:232]
-            self._config_valid = True
-            r = True
+            with self._lock:
+                self._config_str = s[0:232]
+                self._config_valid = True
+                r = True
         return(r)
     
     def set_config_time(self, time_sec_1970):
@@ -401,7 +457,6 @@ class DataParticleType(BaseEnum):
     CONFIG_PARSED = 'config_parsed'
     DATA_RECORD_PARSED = 'data_record_parsed'
     CONTROL_RECORD_PARSED = 'control_record_parsed'
-    ERROR_PARSED = 'error_parsed'
 
 class InstrumentCmds(BaseEnum):
     """
@@ -425,6 +480,7 @@ class ProtocolState(BaseEnum):
     UNKNOWN = DriverProtocolState.UNKNOWN
     COMMAND = DriverProtocolState.COMMAND
     AUTOSAMPLE = DriverProtocolState.AUTOSAMPLE
+    # Future: We could add a manual state by putting the configuration "start" time into the future.
 
 class ProtocolEvent(BaseEnum):
     """
@@ -444,6 +500,7 @@ class ProtocolEvent(BaseEnum):
     ACQUIRE_SAMPLE = DriverEvent.ACQUIRE_SAMPLE
     ACQUIRE_STATUS = DriverEvent.ACQUIRE_STATUS
     CLOCK_SYNC = DriverEvent.CLOCK_SYNC
+    EXECUTE_DIRECT = DriverEvent.EXECUTE_DIRECT
     
     # Different event because we don't want to expose this as a capability
     ACQUIRE_CONFIGURATION = "PROTOCOL_EVENT_ACQUIRE_CONFIGURATION"
@@ -476,13 +533,12 @@ class Parameter(DriverParameter):
     PUMP_PULSE_POST_MEASURE_ENABLE = 'PUMP_PULSE_POST_MEASURE_ENABLE' # bool
     NUM_EXTRA_PUMP_PULSE_CYCLES = 'num_extra_pump_pulse_cycles'
     
-# Device prompts.
+# Device prompts = There are no prompts.
 class Prompt(BaseEnum):
-    """
-    Device i/o prompts..
-    """
-    COMMAND = ""
-    BAD_COMMAND = "?"
+   """
+   Device i/o prompts..
+   """
+   COMMAND = ''
     
 ###############################################################################
 # Data Particles
@@ -503,12 +559,6 @@ class SamiControlRecordParticle(DataParticle):
     Routines for parsing raw data into a data particle structure. Override
     the building of values, and the rest should come along for free.
     """
-    # Control Records: 0x80 - 0xFE 
-    _CTRL_RECORD_TYPE_LAUNCH = 0x80  # Launch - The program started executing, possibly waiting for measurement
-    _CTRL_RECORD_TYPE_START = 0x81  # Start - The measurement sequence has started.
-    _CTRL_RECORD_TYPE_SHUTDOWN = 0x83 # Good Shutdown.
-    _CTRL_RECORD_TYPE_RTS_ENABLE = 0x85  # RTS Handshake is on.
-    _CTRL_RECORD_TYPE_GENERIC_EXTERNAL = 0xFF    # Generic External
 
     # Record information received from instrument may be data or control.
     _data_particle_type = DataParticleType.CONTROL_RECORD_PARSED
@@ -558,16 +608,16 @@ class SamiControlRecordParticle(DataParticle):
         #
         # Preliminary debug information on record type
         #               
-        if( record_type == self._CTRL_RECORD_TYPE_LAUNCH):
+        if( record_type == SamiConfiguration._CTRL_RECORD_TYPE_LAUNCH):
             log.debug("start: " + str(record_type))
             
-        elif( record_type == self._CTRL_RECORD_TYPE_START ):
+        elif( record_type == SamiConfiguration._CTRL_RECORD_TYPE_START ):
             log.debug("Control Record Start")
             
-        elif( record_type == self._CTRL_RECORD_TYPE_SHUTDOWN ):
+        elif( record_type == SamiConfiguration._CTRL_RECORD_TYPE_SHUTDOWN ):
             log.debug("Good Shutdown")
             
-        elif( record_type == self._CTRL_RECORD_TYPE_RTS_ENABLE ):
+        elif( record_type == SamiConfiguration._CTRL_RECORD_TYPE_RTS_ENABLE ):
             log.debug("Handshake Turned on (RTS high)")
 
         # Start: Common record information.
@@ -660,13 +710,6 @@ class SamiDataRecordParticle(DataParticle):
     Routines for parsing raw data into a data particle structure. Override
     the building of values, and the rest should come along for free.
     """
-    # Record types are Control or Data.
-    # Data Records: 0x0 - 0x7F
-
-    # Record types are Control or Data.
-    _DATA_RECORD_TYPE_PH = 0xA  # Not being used right now.
-    _DATA_RECORD_TYPE_CO2 = 0x4
-    _DATA_RECORD_TYPE_BLANK = 0x5
 
     # Record information received from instrument may be data or control.
     _data_particle_type = DataParticleType.DATA_RECORD_PARSED
@@ -707,15 +750,15 @@ class SamiDataRecordParticle(DataParticle):
         except Exception, e:
             raise SampleException("Sami Record ValueError decoding record_type %s: [%s]" % (txt,str(e)))
 
-        if( (record_type != self._DATA_RECORD_TYPE_CO2) & (record_type != self._DATA_RECORD_TYPE_BLANK) ):
-            raise SampleException("SamiDataRecordParticle abort on [%d] not [%d,%d]" %(record_type, self._DATA_RECORD_TYPE_CO2, self._DATA_RECORD_TYPE_BLANK))
+        if( (record_type != SamiConfiguration._DATA_RECORD_TYPE_CO2) & (record_type != SamiConfiguration._DATA_RECORD_TYPE_BLANK) ):
+            raise SampleException("SamiDataRecordParticle abort on [%d] not [%d,%d]" %(record_type, SamiConfiguration._DATA_RECORD_TYPE_CO2, SamiConfiguration._DATA_RECORD_TYPE_BLANK))
             return( result )
         
-        elif( (record_type >= 0x80) & (record_type < 0xFF) ):
+        elif( (record_type >= SamiConfiguration._CTRL_RECORD_RANGE_MIN) & (record_type <= SamiConfiguration._CTRL_RECORD_RANGE_MAX) ):
             raise SampleException("SamiDataRecordParticle trying to process Control Record [%d]" %(record_type))
             return( result )
         
-        elif( record_type == self._DATA_RECORD_TYPE_PH ):
+        elif( record_type == SamiConfiguration._DATA_RECORD_TYPE_PH ):
             raise SampleException("SamiDataRecordParticle trying to process Ph Data Record [%d]" %(record_type))
             return( result )
                         
@@ -753,8 +796,8 @@ class SamiDataRecordParticle(DataParticle):
             return(result)
         
         # Record Type #4,#5 have a length of 39 bytes, time & trailing checksum.
-        if( (record_type == self._DATA_RECORD_TYPE_CO2) |
-            (record_type == self._DATA_RECORD_TYPE_BLANK) ):
+        if( (record_type == SamiConfiguration._DATA_RECORD_TYPE_CO2) |
+            (record_type == SamiConfiguration._DATA_RECORD_TYPE_BLANK) ):
                 
             # Compute now many 8-bit data bytes we have.
             data_length = record_length
@@ -998,7 +1041,7 @@ class SamiConfigDataParticle(DataParticle):
         self.contents[SamiConfigDataParticleKey.LAUNCH_TIME] = program_date_time
         self.contents[SamiConfigDataParticleKey.START_TIME_OFFSET] = start_time_offset
         self.contents[SamiConfigDataParticleKey.RECORDING_TIME] = recording_time  # Time from start to stop.
-   
+
         # Decode the Mode Bits.
         txt = match.group(4)
         mode = int(txt,16)
@@ -1151,7 +1194,6 @@ class SamiConfigDataParticle(DataParticle):
         num_extra_pump_pulse_cycles = int(txt,16)
             
         # PCO2 Pump Data Parameter Updates.
-        self.contents[SamiConfigDataParticleKey.LAUNCH_TIME] = program_date_time
         self.contents[SamiConfigDataParticleKey.PUMP_PULSE] = pump_pulse
         self.contents[SamiConfigDataParticleKey.PUMP_ON_TO_MEAURSURE] = pump_on_to_measure
         self.contents[SamiConfigDataParticleKey.SAMPLES_PER_MEASURE] = samples_per_measure
@@ -1164,7 +1206,7 @@ class SamiConfigDataParticle(DataParticle):
         self.contents[SamiConfigDataParticleKey.NUM_EXTRA_PUMP_PULSE_CYCLES] = num_extra_pump_pulse_cycles
         
         '''
-        log.debug("Decoding string: " + raw_data[SAMI_DRIVER_PARAM_INDEX:SAMI_DRIVER_PARAM_INDEX+18])
+        log.debug("Decoding string: " + raw_data[SamiConfiguration._SAMI_DRIVER_PARAM_INDEX:SamiConfiguration._SAMI_DRIVER_PARAM_INDEX+18])
         log.debug("pump_pulse = " + str(hex(pump_pulse)))
         log.debug("pump_on_to_measure = " + str(hex(pump_on_to_measure)))
         log.debug("samples_per_measure = " + str(hex(samples_per_measure)))
@@ -1536,7 +1578,6 @@ class InstrumentDriver(SingleConnectionInstrumentDriver):
         """
         Construct the driver protocol state machine.
         """
-        Prompt=None
         self._protocol = Protocol(Prompt, NEWLINE, self._driver_event)
 
 
@@ -1556,7 +1597,6 @@ class Protocol(CommandResponseInstrumentProtocol):
     '''
     _sami_config = None
     _sami_new_config_str = None
-    _sami_new_config_valid = False
       
     def __init__(self, prompts, newline, driver_event):
         """
@@ -1577,8 +1617,8 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         # Add event handlers for protocol state machine.
         self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.ENTER, self._handler_unknown_enter)
+        self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.EXIT, self._handler_unknown_exit)
         self._protocol_fsm.add_handler(ProtocolState.UNKNOWN, ProtocolEvent.DISCOVER, self._handler_unknown_discover)
-
         
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.ENTER, self._handler_command_enter)
         self._protocol_fsm.add_handler(ProtocolState.COMMAND, ProtocolEvent.GET, self._handler_command_get)
@@ -1595,6 +1635,11 @@ class Protocol(CommandResponseInstrumentProtocol):
         self._protocol_fsm.add_handler(ProtocolState.AUTOSAMPLE, ProtocolEvent.STOP_AUTOSAMPLE, self._handler_autosample_stop_autosample)
         self._protocol_fsm.add_handler(ProtocolState.AUTOSAMPLE, ProtocolEvent.SCHEDULED_CLOCK_SYNC,self._handler_command_clock_sync)
 
+        # Define a method to manage Sami Configuration updates. Sami Instrument Configurations
+        # should be kept to a minimum.
+        self._sami_config = SamiConfiguration()
+        self._sami_new_config_str = None
+        
         # Construct the parameter dictionary containing device parameters,
         # current parameter values, and set formatting functions.
         self._build_param_dict()
@@ -1613,24 +1658,18 @@ class Protocol(CommandResponseInstrumentProtocol):
         self._add_response_handler(InstrumentCmds.TAKE_SAMPLE,       self._parse_R_response)
         self._add_response_handler(InstrumentCmds.GET_CONFIGURATION, self._parse_config_response)
         self._add_response_handler(InstrumentCmds.SET_CONFIGURATION, self._parse_config_response)
-
-        # Add sample handlers.
-        # Define a method to manage Sami Configuration updates. Sami Instrument Configurations
-        # should be kept to a minimum.
-        self._sami_config = SamiConfiguration()
-        self._sami_new_config_str = None
-        self._sami_new_config_valid = False
-  
+        
+        # Add sample handlers. 
         # State state machine in UNKNOWN state.
         self._protocol_fsm.start(ProtocolState.UNKNOWN)
 
-        self._chunker = StringChunker(Protocol.sieve_function)
+        self._chunker = StringChunker(self.sieve_function)
 
-        self._add_scheduler_event(ScheduledJob.ACQUIRE_STATUS, ProtocolEvent.ACQUIRE_STATUS)
-        self._add_scheduler_event(ScheduledJob.CLOCK_SYNC, ProtocolEvent.SCHEDULED_CLOCK_SYNC)
+        # self._add_scheduler_event(ScheduledJob.ACQUIRE_STATUS, ProtocolEvent.ACQUIRE_STATUS)
+        # self._add_scheduler_event(ScheduledJob.CLOCK_SYNC, ProtocolEvent.SCHEDULED_CLOCK_SYNC)
 
     @staticmethod
-    def decode_record(s):
+    def _decode_record(s):
         """
         Sieve helper to decode identify a Sami Record data particle.
         @param s: raw_data string
@@ -1674,7 +1713,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         for match in matcher.finditer(raw_data):
             i = match.start()
             log.debug("start = " + str(i))
-            [rec_type,rec_len] = Protocol.decode_record(raw_data[i:])
+            [rec_type,rec_len] = Protocol._decode_record(raw_data[i:])
             # Identify Data Records
             if((rec_type >= 0x0) & (rec_type < 0x80)):
                 n = 3 + (2 * rec_len)
@@ -1684,7 +1723,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         for match in matcher.finditer(raw_data):
             i = match.start()
             log.debug("start = " + str(i))
-            [rec_type,rec_len] = Protocol.decode_record(raw_data[i:])
+            [rec_type,rec_len] = Protocol._decode_record(raw_data[i:])
             # Identify Control Records.
             if((rec_type >= 0x80) & (rec_type <= 0xFF)):
                 n = 3 + (2 * rec_len)
@@ -1697,7 +1736,7 @@ class Protocol(CommandResponseInstrumentProtocol):
             for match in matcher.finditer(raw_data):
                 # log.debug("match start " + str(match.start()) + " end = " + str(match.end()))
                 return_list.append((match.start(), match.end()))
-        
+
         # print(return_list)
         return return_list
 
@@ -1718,7 +1757,7 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         # Here we will index to the values in the "fixed string".
         # Pointer to the 1st SAMI Driver 4/5 Parameter String.
-        param_index = SamiConfiguration.SAMI_DRIVER_PARAM_INDEX
+        param_index = SamiConfiguration._SAMI_DRIVER_PARAM_INDEX
         
         # Add parameter handlers to parameter dict.
         self._param_dict.add(Parameter.PUMP_PULSE,
@@ -1785,8 +1824,8 @@ class Protocol(CommandResponseInstrumentProtocol):
             visibility=ParameterDictVisibility.READ_ONLY)
         
         # Special method to populate individual bit-fields              
-        self._param_dict.add_paramdictval( 
-            FunctionParamDictVal( Parameter.STARTUP_BLANK_FLUSH_ENABLE,
+        self._param_dict.add_parameter( 
+            FunctionParameter( Parameter.STARTUP_BLANK_FLUSH_ENABLE,
                                   lambda s: self._decode_switch_bit_invert(input=s,bit_offset=0,pos=param_index+14),
                                   lambda x: self._update_configuration_bit(value=(x==0),bit_offset=0,pos=param_index+14),
                                   direct_access = True,
@@ -1797,8 +1836,8 @@ class Protocol(CommandResponseInstrumentProtocol):
        
         # Special method to populate individual bit-fields
         # Note bit values is inverted for this selection
-        self._param_dict.add_paramdictval(
-            FunctionParamDictVal( Parameter.PUMP_PULSE_POST_MEASURE_ENABLE,
+        self._param_dict.add_parameter(
+            FunctionParameter( Parameter.PUMP_PULSE_POST_MEASURE_ENABLE,
                                   lambda s: self._decode_switch_bit(input=s,bit_offset=1,pos=param_index+14),
                                   lambda x: self._update_configuration_bit(value=x,bit_offset=1, pos=param_index+14),
                                   direct_access = True,
@@ -1828,17 +1867,24 @@ class Protocol(CommandResponseInstrumentProtocol):
         @param: chunk - byte sequence that we want to create a particle from 
         @param: timestamp - port agent timestamp to include in the chunk 
         """
-        log.debug(" got_chunk ************** ")
+        log.debug(" got_chunk ************** " + chunk)
         if(self._extract_sample(SamiDataRecordParticle, DATA_RECORD_REGEX_MATCHER, chunk, timestamp)):
             log.debug("_got_chunk of Data Record = Passed good")
+        
         elif(self._extract_sample(SamiControlRecordParticle, CONTROL_RECORD_REGEX_MATCHER, chunk, timestamp)):
             log.debug("_got_chunk of Control Record = Passed good")
+        
         elif(self._extract_sample(SamiRegularStatusDataParticle, REGULAR_STATUS_REGEX_MATCHER, chunk, timestamp)):
             log.debug("_got_chunk of Regular Status = Passed good")
+            self._parse_S_response(chunk, None)
+
         elif(self._extract_sample(SamiConfigDataParticle, CONFIG_REGEX_MATCHER, chunk, timestamp)):
             log.debug("_got_chunk of Config = Passed good")
+            self._parse_config_response(chunk, None)
+            
         elif(self._extract_sample(SamiErrorDataParticle, ERROR_REGEX_MATCHER, chunk, timestamp)):
             log.debug("_got_chunk of Error = Passed good")
+        
         else:
             log.debug("_got_chunk = Failed")
 
@@ -1848,24 +1894,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         events_out = [x for x in events if Capability.has(x)]
         return events_out
-    
-    def get_config(self, *args, **kwargs):
-        """
-        Get the entire configuration for the instrument
-        @param params The parameters and values to set
-        @retval None if nothing was done, otherwise result of FSM event handle
-        Should be a dict of parameters and values
-        @throws InstrumentProtocolException On invalid parameter
-        """
-        pd = self._param_dict.get_config()
-        log.debug("&&&&&&&&&&&&& get_config: _param_dict: %s" % pd)
 
-        result = self._do_cmd_resp(InstrumentCmds.GET_CONFIGURATION, *args, **kwargs)
-        if not result:
-            log.debug("*** get_config no result!")
-
-        return pd  # CJC This is wrong.
-        
     ########################################################################
     # Unknown handlers.
     ########################################################################
@@ -1877,16 +1906,19 @@ class Protocol(CommandResponseInstrumentProtocol):
         # Tell driver superclass to send a state change event.
         # Superclass will query the state.
         log.debug("Testing _handler_unknown_enter")
-       
-        next_state = None
-        result = None
                                 
         # Initialize the Sami Configuration String for the first time.
         self._sami_config.clear()
+        
         # Tell driver superclass to send a state change event.
         # Superclass will query the state.
         self._driver_event(DriverAsyncEvent.STATE_CHANGE)
-        return(result, next_state)
+
+    def _handler_unknown_exit(self, *args, **kwargs):
+        """
+        Exit unknown state.
+        """
+        pass
 
     def _handler_unknown_discover(self, *args, **kwargs):
         """
@@ -1901,33 +1933,24 @@ class Protocol(CommandResponseInstrumentProtocol):
         next_state = None
         next_agent_state = None
         
-        # Default next state.           
         next_state = ProtocolState.COMMAND
         next_agent_state = ResourceAgentState.IDLE
         
         # Since we are just starting clear out any configuration information being built.
-        sami_config_new_str = None
-        sami_config_new_valid = False
+        self._sami_new_config_str = None
         
         # Make sure automatic-status update is off
         # This will stop the broadcast of information while we are trying to get data.
-        self._do_cmd_resp(InstrumentCmds.AUTO_STATUS_OFF,
-                          expected_prompt = Prompt.COMMAND, *args, **kwargs)
+        cmd = self._build_simple_command(InstrumentCmds.AUTO_STATUS_OFF, NEWLINE)
+        self._do_cmd_direct(cmd)
         
         # We can actually put Sami in a Poll state by setting the start time way in the future.
         # Acquire one sample and return the result.
         log.debug(">>>>>>>>>>>>>>>> GET_CONFIGURATION")
-        result = self._do_cmd_resp(InstrumentCmds.GET_CONFIGURATION, *args, **kwargs)
-        if not result:
-            log.debug( "<<<<<<<<<<<<<<<<<< no result!") 
-                
-        # This is where we will figure out what state we are in.
-        if(self._sami_do_cmd_device_status() is not True ):
-            if( self._is_sampling_active() == True ):
-                next_state = ProtocolState.AUTOSAMPLE
-                next_agent_state = ResourceAgentState.STREAMING
-                
-        return ( next_state, next_agent_state )
+        cmd = self._build_simple_command(InstrumentCmds.GET_CONFIGURATION, NEWLINE)
+        self._do_cmd_direct(cmd)
+        
+        return( next_state, next_agent_state )
 
     ########################################################################
     # Autosample handlers.
@@ -1978,11 +2001,12 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         # Command device to update parameters and send a config change event.
         log.debug("*** IN _handler_command_enter(), updating params")
-        self._update_params()
-
+        
+        # Command device to update parameters and send a config change event.
         # Tell driver superclass to send a state change event.
         # Superclass will query the state.
         self._driver_event(DriverAsyncEvent.STATE_CHANGE)
+
 
     def _handler_command_acquire_sample(self, *args, **kwargs):
         """
@@ -1999,7 +2023,9 @@ class Protocol(CommandResponseInstrumentProtocol):
         result = None
 
         kwargs['timeout'] = 30 # samples can take a long time
-
+        
+        # cmd = self._build_simple_command(InstrumentCmds.TAKE_SAMPLE,NEWLINE)
+        # self._do_cmd_direct(cmd)
         # Acquire one sample and return the result.
         result = self._do_cmd_resp(InstrumentCmds.TAKE_SAMPLE, *args, **kwargs)
 
@@ -2022,7 +2048,9 @@ class Protocol(CommandResponseInstrumentProtocol):
         kwargs['timeout'] = 30 # samples can take a long time
 
         # Acquire one sample and return the result.
-        result = self._do_cmd_resp(InstrumentCmds.DEVICE_STATUS, *args, **kwargs)
+        # result = self._do_cmd_no_resp(InstrumentCmds.DEVICE_STATUS, *args, **kwargs)        
+        cmd = self._build_simple_command(InstrumentCmds.DEVICE_STATUS,NEWLINE)
+        self._do_cmd_direct(cmd)
 
         return (next_state, (next_agent_state, result))
     
@@ -2045,46 +2073,60 @@ class Protocol(CommandResponseInstrumentProtocol):
         # Acquire one sample and return the result.
         result = self._do_cmd_resp(InstrumentCmds.GET_CONFIGURATION, *args, **kwargs)
 
+        # Wait for the prompt, prepare result and return, timeout exception
+        (prompt, result) = self._get_response(timeout,
+                                              expected_prompt=expected_prompt)
+
+        resp_handler = self._response_handlers.get((self.get_current_state(), cmd), None) or \
+            self._response_handlers.get(cmd, None)
+        resp_result = None
+        if resp_handler:
+            resp_result = resp_handler(result, prompt)
+
         return (next_state, (next_agent_state, result))
 
-    def _handler_command_get(self, *args, **kwargs):
+    def _handler_command_get(self, params=None, *args, **kwargs):
         """
-        Get parameter
+        Get parameters while in the command state.
+        @param params List of the parameters to pass to the state
+        @retval returns (next_state, result) where result is a dict {}. No
+            agent state changes happening with Get, so no next_agent_state
+        @throw InstrumentParameterException for invalid parameter
         """
-        log.debug("^^^^^^^^^^^^^^^^^^ in _handler_command_get")
-        next_state = ProtocolState.COMMAND
+        log.debug("*************** _handler_command_get() ****************** ")
+        next_state = None
         result = None
-
-        # This is going to clear out all the results so when we get there will be no data.
-        self._build_param_dict()     #make sure data is up-to-date
-
-        # Retrieve the required parameter, raise if not present.
-        try:
-            params = args[0]
-        except IndexError:
-            raise InstrumentParameterException('Get command requires a parameter list or tuple.')
-
-        # If all params requested, retrieve config.
-        if params == DriverParameter.ALL or DriverParameter.ALL in params:
-            log.debug("DriverParameter.ALL ******************************************** ")
-            result = self._param_dict.get_config()
-
-        else:
-            # If not all params, confirm a list or tuple of params to retrieve.
-            # Raise if not a list or tuple.
-            # Retireve each key in the list, raise if any are invalid.
-            if not isinstance(params, (list, tuple)):
-                raise InstrumentParameterException('Get argument not a list or tuple.')
+        result_vals = {}
+        
+        if (params == None):
+            raise InstrumentParameterException("GET parameter list empty!")
             
-            result = {}
-            for key in params:
-                val = self._param_dict.get(key)
-                log.debug("get KEY = " + str(key) + " VALUE = " + str(val))
-                result[key] = val
+        if (params == Parameter.ALL):
+            params = [Parameter.PUMP_PULSE, Parameter.PUMP_ON_TO_MEASURE,
+                      Parameter.NUM_SAMPLES_PER_MEASURE, Parameter.NUM_CYCLES_BETWEEN_BLANKS,
+                      Parameter.NUM_REAGENT_CYCLES, Parameter.NUM_BLANK_CYCLES,
+                      Parameter.FLUSH_PUMP_INTERVAL_SEC, Parameter.STARTUP_BLANK_FLUSH_ENABLE,
+                      Parameter.PUMP_PULSE_POST_MEASURE_ENABLE, Parameter.NUM_EXTRA_PUMP_PULSE_CYCLES]
+            
+        # Running test.
+        if not isinstance(params, list):
+            print params
+            raise InstrumentParameterException("GET parameter list not a list!")
 
+        # Do a bulk update from the instrument since they are all on one page
+        # self._update_params()
+        
+        # fill the return values from the update
+        for param in params:
+            if not Parameter.has(param):
+                raise InstrumentParameterException("Invalid parameter!")
+            result_vals[param] = self._param_dict.get(param) 
+        result = result_vals
+
+        log.debug("Get finished, next: %s, result: %s", next_state, result) 
         return (next_state, result)
 
-    def _handler_command_set(self, params, *args, **kwargs):
+    def _handler_command_set(self, *args, **kwargs):
         """
         Note: Issue here with only updating minor parameters.
         """
@@ -2095,56 +2137,36 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         log.debug("Testing _handler_command_set_configuration")
 
+        try:
+            params = args[0]
+        except IndexError:
+            raise InstrumentParameterException('Set command requires a parameter dict.')
+
         # Get the current configuration parameters to see if we need to change.                
         if ((params is None) or (not isinstance(params, dict))):
-            raise InstrumentParameterException()
+            raise InstrumentParameterException("Not a valid set parameter")
         
-        # These are the parameters we are going to set...
-        name_values = params
+        # These are the parameters we are going to set...       
         for (key, val) in params.iteritems():
             log.debug("KEY = %s VALUE = %s", key, val)
-        '''
-        for key in name_values.keys():
+            
+        for key in params.keys():
             if not Parameter.has(key):
                 raise InstrumentParameterException()
             try:
-                str_val = self._param_dict.format(key, name_values[key])
-                        
-#               return self._param_dict[key].f_format(val)                   
+                str_val = self._param_dict.format(key, params[key])                       
                 log.debug("str_value ========= " + str_val)
-                self._param_dict.update(sami_config_new_str)
+                self._param_dict.update(self._sami_new_config_str)
+                # Do a get function to make sure it got updated.
                 val = self._param_dict.get(key)
                 result_vals[key] = val
                 log.debug("param from reality 1 = " + str(hex(val)))
             except KeyError:
                 raise InstrumentParameterException()
-        '''
-        for key in params:
-            if not Parameter.has(key):
-                raise InstrumentParameterException()
-            
-            str_val = self._param_dict.format(key, name_values[key])
-            log.debug("str_value ========= " + str_val)
-            try:
-                self._param_dict.update(sami_config_new_str)
-                
-                val = self._param_dict.get(key)
-                result_vals[key] = val
-                log.debug("param from reality 2 = " + str(val) + " " + str(hex(val)))
-
-            except KeyError:
-                raise InstrumentParameterException(('%s is not a valid parameter.' % key))
             
         result = result_vals
-
-        '''
-        result = self._do_cmd_resp(InstrumentCmds.GET_CONFIGURATION, *args, **kwargs)
-        if not result:
-            log.debug("*** no result!")
-		# In 30 seconds should receive message>
-		# Build configuration string and send - this can be done in the build handler.???
-        '''       
-        return (next_state, result)
+        
+        return (next_state, result_vals)
        
     def _handler_command_start_autosample(self):
         """
@@ -2172,11 +2194,56 @@ class Protocol(CommandResponseInstrumentProtocol):
         # Decode current time from device status.
         # compare time against sync time.
         # if <> by some delta then we must resend configuration to update time.
-#       str_time = get_timestamp_delayed("%M %S %d %H %y %m")
         timestamp_sec = get_timestamp_sec(True)
-        if(  self._sami_config.is_valid() is True ):
+        if(self._sami_config.is_valid() is True):
             str_val = self._sami_config.get_time_str(unix_format=True)
         self._do_cmd_resp(InstrumentCmds.SET_REAL_TIME_CLOCK, byte_time, **kwargs)
+
+        return (next_state, (next_agent_state, result))
+    
+    ########################################################################
+    # Direct access handlers.
+    ########################################################################
+
+    def _handler_direct_access_enter(self, *args, **kwargs):
+        """
+        Enter direct access state.
+        """
+        # Tell driver superclass to send a state change event.
+        # Superclass will query the state.
+        self._driver_event(DriverAsyncEvent.STATE_CHANGE)
+
+        self._sent_cmds = []
+
+    def _handler_direct_access_exit(self, *args, **kwargs):
+        """
+        Exit direct access state.
+        """
+        pass
+
+    def _handler_direct_access_execute_direct(self, data):
+        """
+        """
+        next_state = None
+        result = None
+
+        self._do_cmd_direct(data)
+
+        # add sent command to list for 'echo' filtering in callback
+        self._sent_cmds.append(data)
+
+        return (next_state, result)
+
+    def _handler_direct_access_stop_direct(self):
+        """
+        @throw InstrumentProtocolException on invalid command
+        """
+        next_state = None
+        next_agent_state = None
+        result = None
+
+        next_state = ProtocolState.COMMAND
+        next_agent_state = ResourceAgentState.COMMAND
 
         return (next_state, (next_agent_state, result))
     
@@ -2386,6 +2453,7 @@ class Protocol(CommandResponseInstrumentProtocol):
     ###################################################################
     # Builders
     ###################################################################
+
     def _build_config_command(self, cmd, param, value):
         """
         Build a command that is ready to send out to the instrument. Checks for
@@ -2398,8 +2466,9 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         # Check to make sure all parameters are valid up front
         assert cmd == InstrumentCmds.SET_CONFIGURATION
-        log.debug( "%s %s %s%s" % (cmd, param, value, NEWLINE) )
-        return("L5A" + NEWLINE)
+        cmd = self._build_simple_command(cmd,NEWLINE)
+        log.debug( "cmd = " + cmd )
+        return(cmd)
 
     ###################################################################
     # Parsers
@@ -2434,21 +2503,18 @@ class Protocol(CommandResponseInstrumentProtocol):
             log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
             raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
         
-        # Process response
-        match = CONFIG_REGEX_MATCHER.match(response)
-        if match:
-#            SamiConfigDataParticleKey.update(response)
-            result = match.group(1)
-            result = "C" + result
-            log.debug("     *** CONFIG match found " + result)
-
-            # Keep the last configuration.
-            self._update_sami_config( result )
-            
+        else:
+            # This is how we are populating the Parameter Dictionary.
+            self._update_sami_config(response)
             # Parameter data dictionary is extracted from the reponse string.
-            self._param_dict.update(response)
+            # self._param_dict.update(response)
+            self._param_dict.update_many(response)
+            log.debug("done update with result ")
             
-            
+            # Determine if we are currently sampling.
+            start_time = self._sami_config.get_start_time(unix_fmt=True)            
+            is_recording = self._determine_state(start_time)
+
         return result
     
     def _parse_I_response(self, response, prompt):
@@ -2457,24 +2523,27 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         result = None
         log.debug("IIIIIIIIIIIIIIIIIIIIIIIIIIIII response = " + response)
-       
-        # Check for error response
-        error_no = self._find_error(response)
-        if error_no:
-            error_no_str = SamiConfiguration.get_error_str(error_no)
-            log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
-            raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
 
-        # Process message
-        match = IMMEDIATE_STATUS_REGEX_MATCHER.search(response)
-        if match:
-            result = response
-            # This response populates a data particle.
-            if(self._extract_sample(SamiImmediateStatusDataParticle, IMMEDIATE_STATUS_REGEX_MATCHER, response, timestamp=None)):
-                log.debug("_parse_I extract_sample success = ==== " + response)
+        lr = len(response)
+        if(not lr):
+            log.debug("There is no response")
         else:
-            log.debug("No Match Found " + response)
-
+            # Check for error response
+            error_no = self._find_error(response)
+            if error_no:
+                error_no_str = SamiConfiguration.get_error_str(error_no)
+                log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
+                raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
+            else:
+                # Process message
+                match = IMMEDIATE_STATUS_REGEX_MATCHER.search(response)
+                if match:
+                    result = response
+                    # This response populates a data particle.
+                    if(self._extract_sample(SamiImmediateStatusDataParticle, IMMEDIATE_STATUS_REGEX_MATCHER, response, timestamp=None)):
+                        log.debug("_parse_I extract_sample success = ==== " + response)
+                else:
+                    log.debug("No Match Found " + response)
         return result
 
     def _parse_S_response(self, response, prompt): #(self, cmd, *args, **kwargs):
@@ -2490,17 +2559,7 @@ class Protocol(CommandResponseInstrumentProtocol):
             error_no_str = SamiConfiguration.get_error_str(error_no)
             log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
             raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
-
-        # Verify match is valid.
-        match = REGULAR_STATUS_REGEX_MATCHER.match(response)
-        if match:
-            result = response
-            log.debug("     *** Status match found " + result)
-            if(self._extract_sample(SamiRegularStatusDataParticle, REGULAR_STATUS_REGEX_MATCHER, response, timestamp=None)):
-                log.debug("_parse_S extract_sample success = ==== " + response)
-        else:
-            log.debug("No Match Found " + response)
-            
+           
         return result
 
     def _parse_R_response(self, response, prompt):
@@ -2514,40 +2573,62 @@ class Protocol(CommandResponseInstrumentProtocol):
         """
         result = None
         log.debug("RRRRRRRRRRRRRRRRRRRRRRRRRRRRR response = " + response)
-
-        # Check for error response
-        error_no = self._find_error(response)
-        if error_no:
-            error_no_str = SamiConfiguration.get_error_str(error_no)
-            log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
-            raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
-
-        # Verify match is valid.
-        match = DATA_RECORD_REGEX_MATCHER.match(response)
-        if match:
-            result = response
-            if(self._extract_sample(SamiDataRecordDataParticle, DATA_RECORD_REGEX_MATCHER, response, timestamp=None)):
-                log.debug("_parse_S extract_sample success = ==== " + response)
-            log.debug("     *** Status match found " + result)
+        
+        lr = len(response)
+        if(not lr):
+            log.debug("No response found! ")
         else:
-            log.debug("No Match Found " + response)
-            
+            # Check for error response
+            error_no = self._find_error(response)
+            if error_no:
+                error_no_str = SamiConfiguration.get_error_str(error_no)
+                log.error("Sami Config command error; type='%s' msg='%s'", error[0], error_no_str)
+                raise InstrumentParameterException('Sami Command failure: type="%d" msg="%s"' % (error_no, error_no_str))
+            else:
+                # Verify match is valid.
+                match = DATA_RECORD_REGEX_MATCHER.match(response)
+                if match:
+                    result = response
+                    if(self._extract_sample(SamiDataRecordDataParticle, DATA_RECORD_REGEX_MATCHER, response, timestamp=None)):
+                        log.debug("_parse_S extract_sample success = ==== " + response)
+                    log.debug("     *** Status match found " + result)
+                else:
+                    log.debug("No Match Found " + response)
+                                
         # Process message
         return result
     
     ########################################################################
-    # Static Helpers.
-    ########################################################################
+    # Helpers.
+    ########################################################################    
     def _wakeup(self, timeout):
         """There is no wakeup sequence for this instrument"""
         pass
-        return None
-    
+           
+    def _determine_state(self, rec_time_sec):
+        """
+        Determine what state we are in by the instrument time settings.
+        @param rec_time_sec: Sami "Time Of Programming" + "Time Until Start".
+        """
+        is_recording = None
+        # Compute the current time in seconds.
+        time_now_sec = time.time()   # Current seconds since Epoch       
+            
+        log.debug("time_now = " + time.asctime( time.gmtime(time_now_sec) ))
+        log.debug("rec _now = " + time.asctime( time.gmtime(rec_time_sec) ))
+        
+        if( rec_time_sec <= time_now_sec):
+            is_recording = True
+        else:
+            is_recording = False
+        return(is_recording)
+
     def _update_sami_config(self, raw_str):
         """
         Update the Sami Configuration string.
         @param raw_str: Raw input string.
         """
+        log.debug("UUUUUUUUUUUUUUUUUUUpdate _update_sami_config()")
         if( self._sami_config.set_config_str(raw_str) is True):
             # Valid configuration string.
             log.debug("GOODDDDD Config String")
@@ -2560,6 +2641,8 @@ class Protocol(CommandResponseInstrumentProtocol):
             log.debug("New Config: " + self._sami_new_config_str)
         else:
             log.debug("BADDDDD Config String")
+            
+        log.debug("UUUUUUUUUUUUUUUUUU Update _update_sami_config() Done **********")
 
     def _update_params(self, *args, **kwargs):
         """
@@ -2572,20 +2655,14 @@ class Protocol(CommandResponseInstrumentProtocol):
         log.debug("_update_params() - Updating parameter dict")
         
         # Get all the key values.
-
-        update_required = False
-        if( (self._sami_new_config_str is not None) and (self._sami_config.is_valid() is True) ):
-            new_config_str = self._sami_new_config_str
-            old_config_str = self._sami_config.get_config_str()
-            # Compare
-            if( new_config_str[0:232] != old_config_str[0:232] ):
-                update_required = True
-
-        if( update_required == True ):
-#??            self._driver_event(DriverAsyncEvent.CONFIG_CHANGE)
+        chk = self._sami_config.compare(self._sami_new_config_str)  # False is Different.
+        if(chk is None):
+            log.debug("Invalid configuration string")
+        elif(chk is False):
+            #??            self._driver_event(DriverAsyncEvent.CONFIG_CHANGE)
             log.debug("UUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU Update Configuration Command")
 #            self._do_cmd_resp(InstrumentCmds.SET_CONFIGURATION, timeout=timeout)            
-        else:
+        elif(chk is True):
             log.debug("No configuration change")
     # End _update_params()
        
@@ -2596,6 +2673,7 @@ class Protocol(CommandResponseInstrumentProtocol):
     def _string_to_int(v):
         try:
             r = int(v,16)
+            log.debug("DDDDDDDDDDDDDDDDD _string to int " + v)
         except Exception, e:
             raise SampleException("Sami _string_to_int(%s) Fatal: %s" % (txt,str(e)))
         return r
@@ -2608,6 +2686,8 @@ class Protocol(CommandResponseInstrumentProtocol):
         elif( input == "" ):
             log.debug("no string found!")
         else:
+            log.debug("DDDDDDDDDDDDDDDDD _string to int " + input)
+
             len_input = len(input)
             if( (pos+2) >= len_input ):
                 raise SampleException("Sami _decode_switch_bit Invalid Configuration Length %d/%d" %(pos,len_input))
@@ -2651,8 +2731,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         self._sami_new_config_str = replace_string_chars(self._sami_new_config_str, pos, msg)
         return(msg)
 
-    @staticmethod
-    def _update_configuration_byte(value, pos):
+    def _update_configuration_byte(self, value, pos):
         """
         Update the configuraiton string with a value at the desired string index
         @param value: 8-bit value to insert into string
@@ -2662,7 +2741,7 @@ class Protocol(CommandResponseInstrumentProtocol):
         msg = '{:02X}'.format(value)
         log.debug("Updating index "+ str(pos) + " for value " + msg)
         log.debug("sami_string is was " + self._sami_new_config_str)
-        self._self._sami_new_config_str = replace_string_chars(self._self._sami_new_config_str, pos, msg)
-        log.debug("sami_string is now " + self._self._sami_new_config_str)
+        self._sami_new_config_str = replace_string_chars(self._sami_new_config_str, pos, msg)
+        log.debug("sami_string is now " + self._sami_new_config_str)
         return(msg)
 # End of File
