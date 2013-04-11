@@ -538,7 +538,7 @@ class Prompt(BaseEnum):
    """
    Device i/o prompts..
    """
-   COMMAND = ''
+   COMMAND = None
     
 ###############################################################################
 # Data Particles
@@ -2085,45 +2085,47 @@ class Protocol(CommandResponseInstrumentProtocol):
 
         return (next_state, (next_agent_state, result))
 
-    def _handler_command_get(self, params=None, *args, **kwargs):
+    def _handler_command_get(self, *args, **kwargs):
         """
-        Get parameters while in the command state.
-        @param params List of the parameters to pass to the state
-        @retval returns (next_state, result) where result is a dict {}. No
-            agent state changes happening with Get, so no next_agent_state
-        @throw InstrumentParameterException for invalid parameter
+        Get parameter
         """
-        log.debug("*************** _handler_command_get() ****************** ")
-        next_state = None
+        log.debug("^^^^^^^^^^^^^^^^^^ in _handler_command_get")
+        next_state = ProtocolState.COMMAND
         result = None
-        result_vals = {}
-        
-        if (params == None):
-            raise InstrumentParameterException("GET parameter list empty!")
-            
-        if (params == Parameter.ALL):
-            params = [Parameter.PUMP_PULSE, Parameter.PUMP_ON_TO_MEASURE,
-                      Parameter.NUM_SAMPLES_PER_MEASURE, Parameter.NUM_CYCLES_BETWEEN_BLANKS,
-                      Parameter.NUM_REAGENT_CYCLES, Parameter.NUM_BLANK_CYCLES,
-                      Parameter.FLUSH_PUMP_INTERVAL_SEC, Parameter.STARTUP_BLANK_FLUSH_ENABLE,
-                      Parameter.PUMP_PULSE_POST_MEASURE_ENABLE, Parameter.NUM_EXTRA_PUMP_PULSE_CYCLES]
-            
-        # Running test.
-        if not isinstance(params, list):
-            print params
-            raise InstrumentParameterException("GET parameter list not a list!")
 
-        # Do a bulk update from the instrument since they are all on one page
-        # self._update_params()
-        
-        # fill the return values from the update
-        for param in params:
-            if not Parameter.has(param):
-                raise InstrumentParameterException("Invalid parameter!")
-            result_vals[param] = self._param_dict.get(param) 
-        result = result_vals
+        # This is going to clear out all the results so when we get there will be no data.
+        self._build_param_dict()     #make sure data is up-to-date
 
-        log.debug("Get finished, next: %s, result: %s", next_state, result) 
+        # Retrieve the required parameter, raise if not present.
+        try:
+            params = args[0]
+        except IndexError:
+            raise InstrumentParameterException('Get command requires a parameter list or tuple.')
+
+        # If all params requested, retrieve config.
+        if params == DriverParameter.ALL or DriverParameter.ALL in params:
+            log.debug("DriverParameter.ALL ******************************************** ")
+            result_vals = {}
+            # result = self._param_dict.get_config()
+            log.debug("DriverParameter.ALL 22222222222222222222222222222222222222222222 ")
+               
+            result = self._param_dict.get_config()
+                
+            log.debug("DriverParameter.ALL 33333333333333333333333333333333333333333333 ")
+
+        else:
+            # If not all params, confirm a list or tuple of params to retrieve.
+            # Raise if not a list or tuple.
+            # Retireve each key in the list, raise if any are invalid.
+            if not isinstance(params, (list, tuple)):
+                raise InstrumentParameterException('Get argument not a list or tuple.')
+            
+            result = {}
+            for key in params:
+                val = self._param_dict.get(key)
+                log.debug("get KEY = " + str(key) + " VALUE = " + str(val))
+                result[key] = val
+
         return (next_state, result)
 
     def _handler_command_set(self, *args, **kwargs):

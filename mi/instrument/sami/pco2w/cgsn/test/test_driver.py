@@ -852,13 +852,15 @@ class SamiIntegrationTest(InstrumentDriverIntegrationTestCase, DataParticleMixin
     def test_commands(self):
         self.put_instrument_in_command_mode()
         self.assert_driver_command(ProtocolEvent.ACQUIRE_STATUS)
-        self.assert_driver_command(ProtocolEvent.ACQUIRE_SAMPLE)
+        self.assert_driver_command(ProtocolEvent.GET_CONFIGURATION)
+        # self.assert_driver_command(ProtocolEvent.ACQUIRE_SAMPLE)
                 
     def test_set(self):       
         self.put_instrument_in_command_mode()
         
         new_params = {
-           Parameter.PUMP_PULSE: 0xEE
+           Parameter.PUMP_PULSE: 0xAA,
+           Parameter.PUMP_ON_TO_MEASURE: 0xBB
         }
        
         reply = self.driver_client.cmd_dvr('set_resource', new_params)
